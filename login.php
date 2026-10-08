@@ -34,7 +34,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([$username]);
             $user = $stmt->fetch();
 
-            if ($user && $password === $user['password']) {
+            $passValid = false;
+            if ($user) {
+                if (password_verify($password, $user['password'])) {
+                    $passValid = true;
+                } elseif ($password === $user['password']) {
+                    $passValid = true;
+                }
+            }
+
+            if ($user && $passValid) {
                 if ($user['status'] != 1) {
                     $error = "Tài khoản của bạn đang bị khóa! Vui lòng liên hệ Quản trị viên hệ thống.";
                 } else {
