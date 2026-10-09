@@ -99,6 +99,51 @@ function getProductSpec($productCode, PDO $pdo = null) {
 }
 
 /**
+ * Check if a product specification exists in product_specs table
+ * @param string $productCode
+ * @param PDO|null $pdo
+ * @return bool
+ */
+function hasProductSpec($productCode, PDO $pdo = null) {
+    if ($pdo === null) $pdo = getDbConnection();
+    $productCode = trim($productCode);
+    if (empty($productCode)) {
+        return false;
+    }
+    $stmt = $pdo->prepare("SELECT id FROM `product_specs` WHERE `product_code` = ? LIMIT 1");
+    $stmt->execute([$productCode]);
+    return (bool)$stmt->fetchColumn();
+}
+
+/**
+ * Get product spec if exists, otherwise returns null
+ * @param string $productCode
+ * @param PDO|null $pdo
+ * @return array|null
+ */
+function getProductSpecStrict($productCode, PDO $pdo = null) {
+    if ($pdo === null) $pdo = getDbConnection();
+    $productCode = trim($productCode);
+    if (empty($productCode)) {
+        return null;
+    }
+    $stmt = $pdo->prepare("SELECT * FROM `product_specs` WHERE `product_code` = ? LIMIT 1");
+    $stmt->execute([$productCode]);
+    $spec = $stmt->fetch();
+    if ($spec) {
+        return [
+            'product_code'   => $spec['product_code'],
+            'pack_qty'       => max(1, (int)$spec['pack_qty']),
+            'supplier'       => $spec['supplier'] ?? '',
+            'weight_per_box' => (float)$spec['weight_per_box'],
+            'unit'           => $spec['unit'] ?? 'pcs',
+            'description'    => $spec['description'] ?? ''
+        ];
+    }
+    return null;
+}
+
+/**
  * Tạo danh sách Box No tuần tự theo ngày: TU-YYMMDD-XXX
  * Sử dụng transaction & FOR UPDATE bảo đảm an toàn đa tiến trình trong mạng nội bộ
  * @param int $count Số lượng tem thùng cần cấp mã

@@ -29,6 +29,10 @@ $isOddBox   = (int)($_POST['is_odd_box'] ?? 0);
 $adminMsnv  = trim($_POST['admin_msnv'] ?? '');
 $adminPass  = trim($_POST['admin_pass'] ?? $_POST['admin_password'] ?? '');
 $note       = trim($_POST['note'] ?? '');
+$printerDestination = trim($_POST['printer_name'] ?? $_POST['printer_destination'] ?? 'ZDesigner / Zebra (65x30mm)');
+if (empty($printerDestination)) {
+    $printerDestination = 'ZDesigner / Zebra (65x30mm)';
+}
 
 if ($orderId <= 0) {
     echo json_encode(['success' => false, 'message' => 'Chưa chọn chỉ thị sản xuất hợp lệ!']);
@@ -163,12 +167,14 @@ try {
     $stmtUpd->execute([$newPrintedQty, $newRemainingQty, $newStatus, $orderId]);
 
     // LƯU LỊCH SỬ IN (PRINT_HISTORY)
+    $auditNote = !empty($note) ? ($note . ' | [Trạng thái: Đã gửi lệnh in (Printed)]') : '[Trạng thái: Đã gửi lệnh in (Printed)]';
+
     $stmtHist = $pdo->prepare("INSERT INTO `print_history` 
         (`order_id`, `slip_code`, `order_code`, `product_code`, `print_qty`, `pack_qty`, 
          `box_count`, `is_odd_box`, `odd_qty`, `box_numbers`, `qr_data_sample`, 
          `is_over_target`, `approved_by_id`, `approved_by_msnv`, `operator_id`, `operator_name`, 
          `operator_msnv`, `printer_destination`, `note`, `created_at`) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Thermal Label 65x30', ?, NOW())");
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
 
     $stmtHist->execute([
         $orderId,
@@ -188,7 +194,8 @@ try {
         $currentUser['id'],
         $currentUser['full_name'],
         $currentUser['employee_code'],
-        $note
+        $printerDestination,
+        $auditNote
     ]);
 
     $historyId = (int)$pdo->lastInsertId();
@@ -273,17 +280,48 @@ try {
     // Commit Transaction
     $pdo->commit();
 
+    // Ghi log kiểm toán in tem chi tiết ra file logs/print_audit.log
+    try {
+        $logDir = __DIR__ . '/../logs';
+        if (!is_dir($logDir)) {
+            @mkdir($logDir, 0777, true);
+        }
+        $logFile = $logDir . '/print_audit.log';
+        $firstBox = $boxNumbers[0] ?? 'N/A';
+        $lastBox  = $boxNumbers[$totalBoxes - 1] ?? 'N/A';
+        $boxSummaryStr = ($totalBoxes > 1) ? "{$firstBox} -> {$lastBox}" : $firstBox;
+        $logLine = sprintf(
+            "[%s] PRINT_DISPATCHED | User: %s (%s) | Slip: %s | Lot: %s | Product: %s | Qty: %d pcs | Boxes: %d [%s] | Printer: %s | Status: SUCCESS\n",
+            date('Y-m-d H:i:s'),
+            $currentUser['full_name'],
+            $currentUser['employee_code'],
+            $order['slip_code'],
+            $order['order_code'],
+            $order['product_code'],
+            $printQty,
+            $totalBoxes,
+            $boxSummaryStr,
+            $printerDestination
+        );
+        @file_put_contents($logFile, $logLine, FILE_APPEND | LOCK_EX);
+    } catch (Exception $logEx) {
+        // Fail-safe: do not fail print operation if log write encounters disk error
+        error_log('Print audit log error: ' . $logEx->getMessage());
+    }
+
     echo json_encode([
-        'success'        => true,
-        'message'        => 'Đã nhập liệu thành công và sinh ' . $totalBoxes . ' tem thùng!' . ($isOverTarget ? " (Đã duyệt vượt mức bởi {$approvedByMsnv})" : ''),
-        'history_id'     => $historyId,
-        'box_count'      => $totalBoxes,
-        'new_printed'    => $newPrintedQty,
-        'new_remaining'  => $newRemainingQty,
-        'is_over_target' => $isOverTarget,
-        'approved_by'    => $approvedByMsnv,
-        'approved_by_id' => $approvedById,
-        'labels'         => $labels
+        'success'             => true,
+        'message'             => 'Đã nhập liệu thành công và sinh ' . $totalBoxes . ' tem thùng!' . ($isOverTarget ? " (Đã duyệt vượt mức bởi {$approvedByMsnv})" : ''),
+        'history_id'          => $historyId,
+        'box_count'           => $totalBoxes,
+        'new_printed'         => $newPrintedQty,
+        'new_remaining'       => $newRemainingQty,
+        'is_over_target'      => $isOverTarget,
+        'approved_by'         => $approvedByMsnv,
+        'approved_by_id'      => $approvedById,
+        'printer_destination' => $printerDestination,
+        'print_status'        => 'dispatched',
+        'labels'              => $labels
     ]);
 
 } catch (Exception $e) {

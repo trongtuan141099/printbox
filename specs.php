@@ -3,6 +3,7 @@
  * QUẢN LÝ QUY CÁCH ĐÓNG GÓI SẢN PHẨM RIÊNG BIỆT (PRODUCT SPECS)
  * Nơi định nghĩa quy cách con/thùng và nhà cung cấp tự động cho từng mã sản phẩm
  */
+ob_start();
 $pageTitle = "Quy Cách Đóng Gói Sản Phẩm";
 require_once __DIR__ . '/includes/header.php';
 requireRole(['admin', 'editor']);
@@ -44,92 +45,214 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
 // XỬ LÝ IMPORT CSV QUY CÁCH ĐÓNG GÓI
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'import_specs') {
-    if (!isset($_FILES['file_upload']) || $_FILES['file_upload']['error'] !== UPLOAD_ERR_OK) {
-        setFlash('danger', 'Vui lòng chọn file CSV quy cách hợp lệ để tải lên!');
-    } else {
-        $file = $_FILES['file_upload'];
-        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    $isAjax = (
+        (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') ||
+        (isset($_POST['ajax']) && $_POST['ajax'] == '1') ||
+        (isset($_SERVER['HTTP_ACCEPT']) && str_contains($_SERVER['HTTP_ACCEPT'], 'application/json'))
+    );
 
-        if (!in_array($ext, ['csv', 'txt'])) {
-            setFlash('warning', 'Hệ thống chỉ hỗ trợ file định dạng CSV (.csv, .txt UTF-8)!');
-        } else {
-            $rawContent = file_get_contents($file['tmp_name']);
-            if ($rawContent === false || strlen(trim($rawContent)) === 0) {
-                setFlash('danger', 'Nội dung file CSV tải lên bị rỗng!');
-            } else {
-                // Loại bỏ UTF-8 BOM nếu có
-                if (substr($rawContent, 0, 3) === "\xEF\xBB\xBF") {
-                    $rawContent = substr($rawContent, 3);
-                }
-                $encoding = mb_detect_encoding($rawContent, ['UTF-8', 'ISO-8859-1', 'WINDOWS-1252', 'WINDOWS-1258'], true);
-                if ($encoding && $encoding !== 'UTF-8') {
-                    $rawContent = mb_convert_encoding($rawContent, 'UTF-8', $encoding);
-                }
-
-                // Nhận diện dấu phân cách , hoặc ;
-                $lines = preg_split('/\r\n|\r|\n/', trim($rawContent));
-                $firstLine = $lines[0] ?? '';
-                $commaCount = substr_count($firstLine, ',');
-                $semiCount  = substr_count($firstLine, ';');
-                $delimiter  = ($semiCount > $commaCount) ? ';' : ',';
-
-                $tempHandle = fopen('php://memory', 'r+');
-                fwrite($tempHandle, $rawContent);
-                rewind($tempHandle);
-
-                $successCount = 0;
-                $skipCount = 0;
-                $isFirstRow = true;
-
-                $stmtInsert = $pdo->prepare("INSERT INTO `product_specs` 
-                    (`product_code`, `pack_qty`, `supplier`, `weight_per_box`, `unit`, `description`, `created_at`) 
-                    VALUES (?, ?, ?, ?, ?, ?, NOW())
-                    ON DUPLICATE KEY UPDATE 
-                        `pack_qty` = VALUES(`pack_qty`),
-                        `supplier` = VALUES(`supplier`),
-                        `weight_per_box` = VALUES(`weight_per_box`),
-                        `unit` = VALUES(`unit`),
-                        `description` = VALUES(`description`),
-                        `updated_at` = NOW()");
-
-                while (($data = fgetcsv($tempHandle, 2000, $delimiter)) !== false) {
-                    if (empty($data) || (count($data) === 1 && trim($data[0]) === '')) continue;
-
-                    $c0 = trim($data[0] ?? ''); // Mã SP
-                    $c1 = trim($data[1] ?? ''); // Quy cách
-                    $c2 = trim($data[2] ?? ''); // Nhà cung cấp
-                    $c3 = trim($data[3] ?? ''); // Trọng lượng
-                    $c4 = trim($data[4] ?? 'pcs'); // Đơn vị
-                    $c5 = trim($data[5] ?? ''); // Mô tả
-
-                    if ($isFirstRow) {
-                        $isFirstRow = false;
-                        $lowerC0 = mb_strtolower($c0, 'UTF-8');
-                        if (str_contains($lowerC0, 'mã') || str_contains($lowerC0, 'product') || !is_numeric($c1)) {
-                            continue;
-                        }
-                    }
-
-                    $productCode = $c0;
-                    $packQty     = (int)$c1;
-                    $supplier    = $c2;
-                    $weight      = (float)$c3;
-                    $unit        = !empty($c4) ? $c4 : 'pcs';
-                    $desc        = $c5;
-
-                    if (!empty($productCode) && $packQty > 0) {
-                        $stmtInsert->execute([$productCode, $packQty, $supplier, $weight, $unit, $desc]);
-                        $successCount++;
-                    } else {
-                        $skipCount++;
-                    }
-                }
-                fclose($tempHandle);
-                setFlash('success', "Đã import thành công {$successCount} quy cách sản phẩm! (Bỏ qua/lỗi: {$skipCount}).");
-                header("Location: specs.php");
+    try {
+        if (!isset($_FILES['file_upload']) || $_FILES['file_upload']['error'] !== UPLOAD_ERR_OK) {
+            $msg = 'Vui lòng chọn file CSV quy cách hợp lệ để tải lên!';
+            if ($isAjax) {
+                ob_clean();
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['success' => false, 'message' => $msg]);
                 exit;
             }
+            setFlash('danger', $msg);
+            header("Location: specs.php");
+            exit;
         }
+
+        $file = $_FILES['file_upload'];
+        $fileName = $file['name'] ?? 'unknown.csv';
+        $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+
+        if (!in_array($ext, ['csv', 'txt'])) {
+            $msg = 'Hệ thống chỉ hỗ trợ file định dạng CSV (.csv, .txt UTF-8)!';
+            if ($isAjax) {
+                ob_clean();
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['success' => false, 'message' => $msg]);
+                exit;
+            }
+            setFlash('warning', $msg);
+            header("Location: specs.php");
+            exit;
+        }
+
+        $rawContent = file_get_contents($file['tmp_name']);
+        if ($rawContent === false || strlen(trim($rawContent)) === 0) {
+            $msg = 'Nội dung file CSV tải lên bị rỗng!';
+            if ($isAjax) {
+                ob_clean();
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['success' => false, 'message' => $msg]);
+                exit;
+            }
+            setFlash('danger', $msg);
+            header("Location: specs.php");
+            exit;
+        }
+
+        // 1. Tự động loại bỏ UTF-8 BOM nếu có (\xEF\xBB\xBF)
+        $hasBom = false;
+        if (substr($rawContent, 0, 3) === "\xEF\xBB\xBF") {
+            $hasBom = true;
+            $rawContent = substr($rawContent, 3);
+        }
+
+        // 2. Chuẩn hóa cơ chế Detect Encoding an toàn (tránh ValueError trên PHP 8.1+)
+        $detectedEncoding = 'UTF-8';
+        if (!mb_check_encoding($rawContent, 'UTF-8')) {
+            $supportedEncodings = array_intersect(['UTF-8', 'Windows-1252', 'ISO-8859-1', 'ASCII'], mb_list_encodings());
+            $detected = mb_detect_encoding($rawContent, $supportedEncodings, true);
+            if ($detected && $detected !== 'UTF-8') {
+                $detectedEncoding = $detected;
+                $rawContent = mb_convert_encoding($rawContent, 'UTF-8', $detected);
+            }
+        }
+
+        // 3. Nhận diện dấu phân cách , hoặc ;
+        $lines = preg_split('/\r\n|\r|\n/', trim($rawContent));
+        $firstLine = $lines[0] ?? '';
+        $commaCount = substr_count($firstLine, ',');
+        $semiCount  = substr_count($firstLine, ';');
+        $delimiter  = ($semiCount > $commaCount) ? ';' : ',';
+
+        // Ghi log chi tiết tiến trình đọc file
+        $totalLines = count($lines);
+        error_log("[Import Specs] File: {$fileName} | Lines: {$totalLines} | Encoding: {$detectedEncoding} (BOM: " . ($hasBom ? 'YES' : 'NO') . ") | Delimiter: '{$delimiter}' | Header: '{$firstLine}'");
+
+        set_time_limit(300);
+
+        $tempHandle = fopen('php://memory', 'r+');
+        fwrite($tempHandle, $rawContent);
+        rewind($tempHandle);
+
+        $insertedCount = 0;
+        $updatedCount  = 0;
+        $skipCount     = 0;
+        $isFirstRow    = true;
+        $rowIdx        = 0;
+        $rowErrors     = [];
+
+        $stmtFindSpec = $pdo->prepare("SELECT `id` FROM `product_specs` WHERE `product_code` = ? LIMIT 1");
+        $stmtUpdate   = $pdo->prepare("UPDATE `product_specs` SET 
+            `pack_qty` = ?, 
+            `supplier` = ?, 
+            `weight_per_box` = ?, 
+            `unit` = ?, 
+            `description` = ?, 
+            `updated_at` = NOW() 
+            WHERE `id` = ?");
+        $stmtInsert   = $pdo->prepare("INSERT INTO `product_specs` 
+            (`product_code`, `pack_qty`, `supplier`, `weight_per_box`, `unit`, `description`, `created_at`) 
+            VALUES (?, ?, ?, ?, ?, ?, NOW())");
+
+        $pdo->beginTransaction();
+
+        while (($data = fgetcsv($tempHandle, 2000, $delimiter)) !== false) {
+            $rowIdx++;
+            if (empty($data) || (count($data) === 1 && trim($data[0]) === '')) continue;
+
+            $c0 = trim($data[0] ?? ''); // Mã SP
+            $c1 = trim($data[1] ?? ''); // Quy cách
+            $c2 = trim($data[2] ?? ''); // Nhà cung cấp
+            $c3 = trim($data[3] ?? ''); // Trọng lượng
+            $c4 = trim($data[4] ?? 'pcs'); // Đơn vị
+            $c5 = trim($data[5] ?? ''); // Mô tả
+
+            if ($isFirstRow) {
+                $isFirstRow = false;
+                $lowerC0 = mb_strtolower($c0, 'UTF-8');
+                if (str_contains($lowerC0, 'mã') || str_contains($lowerC0, 'product') || !is_numeric($c1)) {
+                    continue;
+                }
+            }
+
+            $productCode = $c0;
+            $packQty     = (int)$c1;
+            $supplier    = $c2;
+            $weight      = is_numeric($c3) ? (float)$c3 : 0.0;
+            $unit        = !empty($c4) ? $c4 : 'pcs';
+            $desc        = $c5;
+
+            if (!empty($productCode) && $packQty > 0) {
+                $stmtFindSpec->execute([$productCode]);
+                $existing = $stmtFindSpec->fetch(PDO::FETCH_ASSOC);
+
+                if ($existing) {
+                    $stmtUpdate->execute([$packQty, $supplier, $weight, $unit, $desc, $existing['id']]);
+                    $updatedCount++;
+                } else {
+                    $stmtInsert->execute([$productCode, $packQty, $supplier, $weight, $unit, $desc]);
+                    $insertedCount++;
+                }
+            } else {
+                $skipCount++;
+                $errorMsg = "Dòng {$rowIdx}: Thiếu thông tin Mã SP hoặc Quy cách <= 0 (Mã SP: '{$productCode}')";
+                $rowErrors[] = $errorMsg;
+                if (count($rowErrors) === 1) {
+                    error_log("[Import Specs] First row validation error: {$errorMsg}");
+                }
+            }
+        }
+
+        $pdo->commit();
+        fclose($tempHandle);
+
+        $totalDataRows = $insertedCount + $updatedCount + $skipCount;
+        $msgLines = [
+            "Import hoàn tất",
+            "Tổng số dòng: {$totalDataRows}",
+            "Thêm mới: {$insertedCount}",
+            "Cập nhật: {$updatedCount}",
+            "Lỗi/Bỏ qua: {$skipCount}"
+        ];
+        $successMsg = implode("\n", $msgLines);
+
+        if ($isAjax) {
+            ob_clean();
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'success'        => ($insertedCount + $updatedCount > 0),
+                'message'        => $successMsg,
+                'total_rows'     => $totalDataRows,
+                'inserted_count' => $insertedCount,
+                'updated_count'  => $updatedCount,
+                'skip_count'     => $skipCount,
+                'errors'         => array_slice($rowErrors, 0, 10)
+            ]);
+            exit;
+        }
+
+        setFlash('success', "Import hoàn tất: Tổng số {$totalDataRows} dòng (Thêm mới: {$insertedCount}, Cập nhật: {$updatedCount}, Bỏ qua/lỗi: {$skipCount}).");
+        header("Location: specs.php");
+        exit;
+
+    } catch (Throwable $e) {
+        if ($pdo && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log("[Import Specs Fatal Error] " . $e->getMessage() . "\nStack trace:\n" . $e->getTraceAsString());
+
+        $errorMsg = "Lỗi xử lý file Import: " . $e->getMessage();
+        if ($isAjax) {
+            ob_clean();
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'success' => false,
+                'message' => $errorMsg,
+                'trace'   => $e->getTraceAsString()
+            ]);
+            exit;
+        }
+
+        setFlash('danger', $errorMsg);
+        header("Location: specs.php");
+        exit;
     }
 }
 
@@ -310,7 +433,7 @@ $specsList = $stmt->fetchAll();
 <!-- MODAL IMPORT CSV QUY CÁCH -->
 <div class="modal fade" id="modalImportSpec" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
-        <form method="POST" action="specs.php" enctype="multipart/form-data" class="modal-content border-0 shadow">
+        <form method="POST" action="specs.php" enctype="multipart/form-data" id="form_import_specs" class="modal-content border-0 shadow">
             <input type="hidden" name="action" value="import_specs">
             <div class="modal-header">
                 <h5 class="modal-title fw-bold">📂 Import Quy Cách Đóng Gói Từ CSV</h5>
@@ -322,7 +445,7 @@ $specsList = $stmt->fetchAll();
                     <code>Mã sản phẩm, Quy cách (con/thùng), Nhà cung cấp, Trọng lượng, Đơn vị, Mô tả</code>
                 </div>
                 <div class="mb-3">
-                    <a href="sample_specs.csv" download class="btn btn-sm btn-outline-primary">
+                    <a href="export.php?type=sample_specs" download="sample_specs.csv" class="btn btn-sm btn-outline-primary">
                         📥 Tải File Mẫu Quy Cách (sample_specs.csv)
                     </a>
                 </div>
@@ -396,6 +519,82 @@ function openImportSpecModal() {
 window.openSpecModal = openSpecModal;
 window.editSpec = editSpec;
 window.openImportSpecModal = openImportSpecModal;
+
+// AJAX IMPORT CSV SPECS
+const formImportSpecs = document.getElementById('form_import_specs');
+if (formImportSpecs) {
+    formImportSpecs.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const submitBtn = this.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerText = '⏳ Đang nạp dữ liệu...';
+        }
+
+        const formData = new FormData(this);
+        formData.append('ajax', '1');
+
+        fetch('specs.php', {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            }
+        })
+        .then(async response => {
+            const httpStatus = response.status;
+            const contentType = response.headers.get('content-type') || '';
+            const responseText = await response.text();
+
+            console.log('[Import Specs] HTTP Status:', httpStatus);
+            console.log('[Import Specs] Content-Type:', contentType);
+            console.log('[Import Specs] Response Body:', responseText);
+
+            if (!response.ok || !contentType.toLowerCase().includes('application/json')) {
+                console.error('[Import Specs] Server returned non-JSON response:', { httpStatus, contentType, responseText });
+                throw new Error('INVALID_JSON_RESPONSE');
+            }
+
+            try {
+                return JSON.parse(responseText);
+            } catch (parseError) {
+                console.error('[Import Specs] JSON parse error:', parseError, responseText);
+                throw new Error('INVALID_JSON_RESPONSE');
+            }
+        })
+        .then(data => {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerText = 'Bắt Đầu Nạp Dữ Liệu';
+            }
+            if (data.message) {
+                alert(data.message);
+            } else if (data.errors && data.errors.length > 0) {
+                alert('Lỗi nạp file:\n' + data.errors.join('\n'));
+            } else {
+                alert('Có lỗi xảy ra khi nạp file!');
+            }
+
+            if (data.success || data.inserted_count > 0 || data.updated_count > 0) {
+                const modal = getImportSpecModal();
+                if (modal) modal.hide();
+                location.reload();
+            }
+        })
+        .catch(err => {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerText = 'Bắt Đầu Nạp Dữ Liệu';
+            }
+            if (err.message === 'INVALID_JSON_RESPONSE') {
+                alert('Không thể xử lý dữ liệu import. Vui lòng kiểm tra log hệ thống.');
+            } else {
+                alert('Lỗi kết nối: ' + err.message);
+            }
+        });
+    });
+}
 </script>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>

@@ -44,18 +44,25 @@ if (empty($slipCode) || empty($orderCode) || empty($productCode) || $targetQty <
 
 $pdo = getDbConnection();
 
-// Tự động mapping quy cách nếu chưa nhập hoặc nhập 0
-if ($packQty <= 0 || empty($supplier) || $weight <= 0) {
-    $spec = getProductSpec($productCode, $pdo);
-    if ($packQty <= 0) {
-        $packQty = (int)$spec['pack_qty'];
-    }
-    if (empty($supplier)) {
-        $supplier = $spec['supplier'];
-    }
-    if ($weight <= 0) {
-        $weight = (float)$spec['weight_per_box'];
-    }
+// Kiểm tra bắt buộc: Sản phẩm phải có Quy Cách đã được khai báo trước trong hệ thống
+$spec = getProductSpecStrict($productCode, $pdo);
+if (!$spec) {
+    echo json_encode([
+        'success' => false,
+        'message' => "Chưa thiết lập quy cách cho sản phẩm [{$productCode}]. Vui lòng tạo quy cách trước khi tạo chỉ thị sản xuất!"
+    ]);
+    exit;
+}
+
+// Tự động mapping quy cách từ bảng product_specs nếu chưa nhập hoặc nhập 0
+if ($packQty <= 0) {
+    $packQty = (int)$spec['pack_qty'];
+}
+if (empty($supplier)) {
+    $supplier = $spec['supplier'];
+}
+if ($weight <= 0) {
+    $weight = (float)$spec['weight_per_box'];
 }
 if ($packQty <= 0) {
     $packQty = 1;

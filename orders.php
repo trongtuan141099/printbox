@@ -36,26 +36,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $weight      = (float)($_POST['weight_per_box'] ?? 0);
     $note        = trim($_POST['note'] ?? '');
 
+    if (empty($slipCode) || empty($orderCode) || empty($productCode) || $targetQty <= 0) {
+        setFlash('danger', 'Vui lòng nhập đầy đủ các thông tin bắt buộc (*)!');
+        header("Location: orders.php");
+        exit;
+    }
+
+    // Kiểm tra bắt buộc: Sản phẩm phải có Quy Cách đã được khai báo trước trong hệ thống
+    $spec = getProductSpecStrict($productCode, $pdo);
+    if (!$spec) {
+        setFlash('danger', "Chưa thiết lập quy cách cho sản phẩm [{$productCode}]. Vui lòng tạo quy cách trước khi tạo chỉ thị sản xuất!");
+        header("Location: orders.php");
+        exit;
+    }
+
     // Nếu người dùng không nhập quy cách hoặc NCC, tự động tra cứu từ product_specs
-    if ($packQty <= 0 || empty($supplier)) {
-        $spec = getProductSpec($productCode, $pdo);
-        if ($packQty <= 0) {
-            $packQty = (int)$spec['pack_qty'];
-        }
-        if (empty($supplier)) {
-            $supplier = $spec['supplier'];
-        }
-        if ($weight <= 0) {
-            $weight = (float)$spec['weight_per_box'];
-        }
+    if ($packQty <= 0) {
+        $packQty = (int)$spec['pack_qty'];
+    }
+    if (empty($supplier)) {
+        $supplier = $spec['supplier'];
+    }
+    if ($weight <= 0) {
+        $weight = (float)$spec['weight_per_box'];
     }
     if ($packQty <= 0) $packQty = 1;
 
-    if (empty($slipCode) || empty($orderCode) || empty($productCode) || $targetQty <= 0) {
-        setFlash('danger', 'Vui lòng nhập đầy đủ các thông tin bắt buộc (*)!');
-    } else {
-        try {
-            $stmt = $pdo->prepare("INSERT INTO `production_orders` 
+    try {
+        $stmt = $pdo->prepare("INSERT INTO `production_orders` 
                 (`slip_code`, `order_code`, `product_code`, `issue_month`, `target_qty`, `printed_qty`, `remaining_qty`, `pack_qty`, `supplier`, `weight_per_box`, `status`, `note`, `created_by`, `created_at`) 
                 VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())");
             $stmt->execute([
@@ -81,7 +89,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 setFlash('danger', "Lỗi lưu CSDL: " . $e->getMessage());
             }
         }
-    }
 }
 
 // =======================================================
@@ -233,9 +240,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             if (substr($rawContent, 0, 3) === "\xEF\xBB\xBF") {
                 $rawContent = substr($rawContent, 3);
             }
-            $encoding = mb_detect_encoding($rawContent, ['UTF-8', 'ISO-8859-1', 'WINDOWS-1252', 'WINDOWS-1258'], true);
-            if ($encoding && $encoding !== 'UTF-8') {
-                $rawContent = mb_convert_encoding($rawContent, 'UTF-8', $encoding);
+            if (!mb_check_encoding($rawContent, 'UTF-8')) {
+                $supportedEncodings = array_intersect(['UTF-8', 'Windows-1252', 'ISO-8859-1'], mb_list_encodings());
+                $encoding = mb_detect_encoding($rawContent, $supportedEncodings, true);
+                if ($encoding && $encoding !== 'UTF-8') {
+                    $rawContent = mb_convert_encoding($rawContent, 'UTF-8', $encoding);
+                }
             }
 
             // Tự động nhận diện dấu phân cách (, hoặc ;)
@@ -249,24 +259,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             fwrite($tempHandle, $rawContent);
             rewind($tempHandle);
 
-            $successCount = 0;
-            $skipCount = 0;
-            $isFirstRow = true;
+            $totalDataRows = 0;
+            $insertedCount = 0;
+            $updatedCount  = 0;
+            $errorCount    = 0;
+            $missingSpecs  = [];
+
+            $stmtFindSpec  = $pdo->prepare("SELECT product_code, pack_qty, supplier, weight_per_box FROM `product_specs` WHERE `product_code` = ? LIMIT 1");
+            $stmtFindOrder = $pdo->prepare("SELECT id, printed_qty FROM `production_orders` WHERE `slip_code` = ? LIMIT 1");
 
             $stmtInsert = $pdo->prepare("INSERT INTO `production_orders` 
                 (`slip_code`, `order_code`, `product_code`, `issue_month`, `target_qty`, `printed_qty`, `remaining_qty`, `pack_qty`, `supplier`, `weight_per_box`, `status`, `note`, `created_by`, `created_at`) 
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())
-                ON DUPLICATE KEY UPDATE 
-                    `order_code`     = VALUES(`order_code`),
-                    `product_code`   = VALUES(`product_code`),
-                    `issue_month`    = VALUES(`issue_month`),
-                    `target_qty`     = VALUES(`target_qty`),
-                    `remaining_qty`  = VALUES(`target_qty`) - `printed_qty`,
-                    `pack_qty`       = VALUES(`pack_qty`),
-                    `supplier`       = VALUES(`supplier`),
-                    `weight_per_box` = VALUES(`weight_per_box`),
-                    `note`           = VALUES(`note`),
-                    `updated_at`     = NOW()");
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())");
+
+            $stmtUpdate = $pdo->prepare("UPDATE `production_orders` SET 
+                `order_code`     = ?,
+                `product_code`   = ?,
+                `issue_month`    = ?,
+                `target_qty`     = ?,
+                `remaining_qty`  = ?,
+                `pack_qty`       = ?,
+                `supplier`       = ?,
+                `weight_per_box` = ?,
+                `note`           = ?,
+                `updated_at`     = NOW()
+                WHERE `id` = ?");
+
+            $pdo->beginTransaction();
 
             while (($data = fgetcsv($tempHandle, 2000, $delimiter)) !== false) {
                 if (empty($data) || (count($data) === 1 && trim($data[0]) === '')) continue;
@@ -286,6 +305,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     }
                 }
 
+                $totalDataRows++;
+
                 $slipCode    = $c0;
                 $orderCode   = $c1;
                 $productCode = $c2;
@@ -293,33 +314,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $targetQty   = (int)$c4;
                 $note        = $c5;
 
-                if (!empty($slipCode) && !empty($orderCode) && !empty($productCode) && $targetQty > 0) {
-                    // TỰ ĐỘNG TRA CỨU QUY CÁCH & NHÀ CUNG CẤP TỪ PRODUCT_SPECS
-                    $spec = getProductSpec($productCode, $pdo);
-                    $packQty  = (int)$spec['pack_qty'];
-                    $supplier = $spec['supplier'];
-                    $weight   = (float)$spec['weight_per_box'];
+                if (empty($slipCode) || empty($orderCode) || empty($productCode) || $targetQty <= 0) {
+                    $errorCount++;
+                    continue;
+                }
 
-                    $stmtInsert->execute([
-                        $slipCode,
-                        $orderCode,
-                        $productCode,
-                        $issueMonth,
-                        $targetQty,
-                        $targetQty,
-                        $packQty,
-                        $supplier,
-                        $weight,
-                        $note,
-                        $currentUser['id']
-                    ]);
-                    $successCount++;
-                } else {
-                    $skipCount++;
+                // ĐỐI CHIẾU MÃ SẢN PHẨM VỚI DỮ LIỆU QUY CÁCH (SPECS)
+                $stmtFindSpec->execute([$productCode]);
+                $spec = $stmtFindSpec->fetch(PDO::FETCH_ASSOC);
+
+                if (!$spec) {
+                    $errorCount++;
+                    $missingSpecs[$productCode] = true;
+                    continue;
+                }
+
+                $packQty  = (int)$spec['pack_qty'];
+                $supplier = $spec['supplier'] ?? '';
+                $weight   = (float)$spec['weight_per_box'];
+
+                // XỬ LÝ UPSERT THEO slip_code
+                $stmtFindOrder->execute([$slipCode]);
+                $existingOrder = $stmtFindOrder->fetch(PDO::FETCH_ASSOC);
+
+                try {
+                    if ($existingOrder) {
+                        $orderId    = (int)$existingOrder['id'];
+                        $printedQty = (int)$existingOrder['printed_qty'];
+                        $remainQty  = max(0, $targetQty - $printedQty);
+
+                        $stmtUpdate->execute([
+                            $orderCode,
+                            $productCode,
+                            $issueMonth,
+                            $targetQty,
+                            $remainQty,
+                            $packQty,
+                            $supplier,
+                            $weight,
+                            $note,
+                            $orderId
+                        ]);
+                        $updatedCount++;
+                    } else {
+                        $stmtInsert->execute([
+                            $slipCode,
+                            $orderCode,
+                            $productCode,
+                            $issueMonth,
+                            $targetQty,
+                            $targetQty,
+                            $packQty,
+                            $supplier,
+                            $weight,
+                            $note,
+                            $currentUser['id']
+                        ]);
+                        $insertedCount++;
+                    }
+                } catch (PDOException $e) {
+                    $errorCount++;
                 }
             }
+
+            $pdo->commit();
             fclose($tempHandle);
-            setFlash('success', "Đã import thành công {$successCount} chỉ thị! (Bỏ qua/lỗi: {$skipCount}). Quy cách đóng gói đã tự động map từ danh mục Specs.");
+
+            $missingList = array_keys($missingSpecs);
+            $flashMsg = "Import hoàn tất: Tổng số {$totalDataRows} dòng (Thêm mới: {$insertedCount}, Cập nhật: {$updatedCount}, Lỗi: {$errorCount}).";
+            if (!empty($missingList)) {
+                $flashMsg .= " Các sản phẩm chưa có quy cách: " . implode(', ', $missingList);
+                setFlash('warning', $flashMsg);
+            } else {
+                setFlash('success', $flashMsg);
+            }
             header("Location: orders.php");
             exit;
         }
@@ -334,11 +402,14 @@ $searchKeyword = trim($_GET['k'] ?? '');
 $filterStatus  = trim($_GET['status'] ?? '');
 $filterMonth   = trim($_GET['month'] ?? '');
 
-$sql = "SELECT * FROM `production_orders` WHERE 1=1";
+$sql = "SELECT po.*, (CASE WHEN ps.id IS NOT NULL THEN 1 ELSE 0 END) AS has_spec 
+        FROM `production_orders` po 
+        LEFT JOIN `product_specs` ps ON po.`product_code` = ps.`product_code` 
+        WHERE 1=1";
 $params = [];
 
 if (!empty($searchKeyword)) {
-    $sql .= " AND (`slip_code` LIKE ? OR `order_code` LIKE ? OR `product_code` LIKE ? OR `supplier` LIKE ?)";
+    $sql .= " AND (po.`slip_code` LIKE ? OR po.`order_code` LIKE ? OR po.`product_code` LIKE ? OR po.`supplier` LIKE ?)";
     $kParam = "%{$searchKeyword}%";
     $params[] = $kParam;
     $params[] = $kParam;
@@ -347,16 +418,16 @@ if (!empty($searchKeyword)) {
 }
 
 if (!empty($filterStatus)) {
-    $sql .= " AND `status` = ?";
+    $sql .= " AND po.`status` = ?";
     $params[] = $filterStatus;
 }
 
 if (!empty($filterMonth)) {
-    $sql .= " AND `issue_month` LIKE ?";
+    $sql .= " AND po.`issue_month` LIKE ?";
     $params[] = "%{$filterMonth}%";
 }
 
-$sql .= " ORDER BY `id` DESC";
+$sql .= " ORDER BY po.`id` DESC";
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $orders = $stmt->fetchAll();
@@ -515,6 +586,11 @@ $exportParams = http_build_query([
                             </td>
                             <td class="text-center">
                                 <span class="badge bg-light text-dark border"><?= (int)$row['pack_qty'] ?> con/thùng</span>
+                                <?php if (!empty($row['has_spec'])): ?>
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle d-block mt-1" style="font-size:10px;">✓ Đã có quy cách</span>
+                                <?php else: ?>
+                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle d-block mt-1" style="font-size:10px;">⚠️ Chưa có quy cách</span>
+                                <?php endif; ?>
                             </td>
                             <td>
                                 <div class="d-flex align-items-center gap-1">
@@ -701,6 +777,18 @@ $exportParams = http_build_query([
             </div>
 
             <div class="mb-3">
+                <label class="form-label fw-bold">Máy In Tem Sử Dụng</label>
+                <select id="offcanvas_printer_select" class="form-select">
+                    <option value="ZDesigner / Zebra (65x30mm)">ZDesigner / Zebra (65x30mm)</option>
+                    <option value="Godex Industrial (65x30mm)">Godex Industrial (65x30mm)</option>
+                    <option value="Xprinter Barcode (65x30mm)">Xprinter Barcode (65x30mm)</option>
+                    <option value="Sato Label Printer (65x30mm)">Sato Label Printer (65x30mm)</option>
+                    <option value="Standard Label Printer (65x30mm)">Máy in tem mặc định (65x30mm)</option>
+                </select>
+                <small class="text-muted">Định dạng nhiệt chuẩn 65mm &times; 30mm tương thích công nghiệp.</small>
+            </div>
+
+            <div class="mb-3">
                 <label class="form-label">Ghi Chú Đợt In (Tùy chọn)</label>
                 <input type="text" id="offcanvas_note" class="form-control" placeholder="Ghi chú máy in, ca kíp...">
             </div>
@@ -749,6 +837,10 @@ $exportParams = http_build_query([
                 <tr>
                     <td class="fw-bold bg-light">Số tem thùng sinh ra:</td>
                     <td id="cf_box_count" class="fw-bold text-success fs-5">-</td>
+                </tr>
+                <tr>
+                    <td class="fw-bold bg-light">Máy in chỉ định:</td>
+                    <td id="cf_printer_name" class="fw-bold text-dark">-</td>
                 </tr>
                 <tr id="cf_row_odd" style="display:none;" class="table-warning">
                     <td class="fw-bold text-warning">Chi tiết thùng lẻ:</td>
@@ -825,32 +917,37 @@ $exportParams = http_build_query([
 </div>
 
 <!-- =======================================================
-     MODAL 3: XEM VÀ IN TEM THÙNG SATO 65x30MM
+     MODAL 3: XEM VÀ IN TEM THÙNG CHUẨN CÔNG NGHIỆP 65x30MM
      ======================================================= -->
 <div id="modal_print_result" class="modal-overlay">
-    <div class="modal-dialog" style="max-width:850px;">
-        <div class="modal-header no-print bg-light">
-            <span class="modal-title fw-bold text-dark">🖨️ Tem Thùng Đã Sinh - Sẵn Sàng In</span>
+    <div class="modal-dialog" style="max-width:760px;">
+        <div class="modal-header no-print bg-light py-2">
+            <div class="d-flex align-items-center gap-2">
+                <span class="fs-5">🏷️</span>
+                <span class="modal-title fw-bold text-dark">Xem Trước &amp; In Tem QR (65mm &times; 30mm)</span>
+            </div>
             <button type="button" class="modal-close" onclick="closeModal('modal_print_result')">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="alert alert-success no-print mb-3 d-flex justify-content-between align-items-center">
-                <span>✅ Đã lưu lịch sử và sinh thành công <strong id="res_box_count">0</strong> tem thùng!</span>
-                <button type="button" class="btn btn-primary fw-bold" onclick="triggerDirectPrint()">
-                    🖨️ GỬI LỆNH IN RA MÁY IN
-                </button>
+        <div class="modal-body p-3">
+            <!-- THANH THÔNG TIN PREVIEW TINH GỌN (CHỈ HIỆN TRÊN MÀN HÌNH, ẨN HOÀN TOÀN KHI IN) -->
+            <div class="no-print d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-2 bg-light border rounded">
+                <div class="small">
+                    <strong>Số tem:</strong> <span id="res_box_count" class="badge bg-success fs-6">0</span> tem | 
+                    <strong>Máy in:</strong> <span id="res_printer_name" class="text-primary fw-bold">ZDesigner / Zebra (65x30mm)</span>
+                </div>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="closeModal('modal_print_result')">Đóng</button>
+                    <button type="button" class="btn btn-primary btn-sm fw-bold" onclick="triggerDirectPrint()">🖨️ Gửi Lệnh In</button>
+                </div>
             </div>
 
-            <div class="no-print mb-2 text-muted small">
-                Khổ in nhiệt chuẩn: <strong>65mm &times; 30mm</strong>. Mỗi tem thùng tự động ngắt trang riêng biệt.
-            </div>
-
-            <!-- CONTAINER CHỨA DANH SÁCH TEM ĐÃ SINH -->
+            <!-- VÙNG PREVIEW VÀ IN TEM DUY NHẤT (CHUẨN 65x30MM, KHÔNG THANH CUỘN LÀM BIẾN DẠNG) -->
             <div id="printable_labels_container" class="label-preview-wrapper">
                 <!-- Javascript điền tem vào đây -->
             </div>
         </div>
-        <div class="modal-footer no-print">
+        <div class="modal-footer no-print py-2">
+            <span class="text-muted small me-auto">💡 Tự động kích hoạt máy in. Khổ tem 65mm &times; 30mm, 1 tem = 1 trang.</span>
             <button type="button" class="btn btn-secondary" onclick="closeModal('modal_print_result')">Đóng</button>
             <button type="button" class="btn btn-primary fw-bold" onclick="triggerDirectPrint()">🖨️ In Lại</button>
         </div>
@@ -1024,7 +1121,7 @@ $exportParams = http_build_query([
                 </div>
 
                 <div class="mb-3">
-                    <a href="sample_orders.csv" download class="btn btn-sm btn-outline-primary">
+                    <a href="export.php?type=sample_orders" download="sample_orders.csv" class="btn btn-sm btn-outline-primary">
                         📥 Tải File Mẫu (sample_orders.csv)
                     </a>
                 </div>
@@ -1446,6 +1543,11 @@ if (btnOffSubmit) {
         }
 
         // Điền modal xác nhận nhà máy
+        const printerSelect = document.getElementById('offcanvas_printer_select');
+        const selectedPrinter = printerSelect ? printerSelect.value : 'ZDesigner / Zebra (65x30mm)';
+        const cfPrinterEl = document.getElementById('cf_printer_name');
+        if (cfPrinterEl) cfPrinterEl.innerText = selectedPrinter;
+
         document.getElementById('cf_slip_code').innerText = currentOrder.slip_code;
         document.getElementById('cf_order_code').innerText = currentOrder.order_code;
         document.getElementById('cf_product_code').innerText = currentOrder.product_code;
@@ -1516,12 +1618,16 @@ function submitAdminApproval() {
     fb.style.color = '#2563eb';
     fb.innerText = 'Đang kiểm tra quyền duyệt & sinh mã tem...';
 
+    const printerSelect = document.getElementById('offcanvas_printer_select');
+    const selectedPrinter = printerSelect ? printerSelect.value : 'ZDesigner / Zebra (65x30mm)';
+
     const formData = new FormData();
     formData.append('order_id', currentOrder.id);
     formData.append('print_qty', currentCalculation.printQty);
     formData.append('is_odd_box', (currentCalculation.hasOdd && document.getElementById('oc_chk_odd_box').checked) ? 1 : 0);
     formData.append('msnv', msnv);
     formData.append('password', pass);
+    formData.append('printer_name', selectedPrinter);
     formData.append('note', document.getElementById('offcanvas_note').value.trim());
 
     fetch('ajax/authorize_override.php', {
@@ -1561,13 +1667,13 @@ function submitAdminApproval() {
             // Hiển thị kết quả in tem với mã QR
             renderPrintedLabels(data.labels);
             document.getElementById('res_box_count').innerText = data.labels.length;
+            const resPrinterEl = document.getElementById('res_printer_name');
+            if (resPrinterEl) resPrinterEl.innerText = selectedPrinter;
             openModal('modal_print_result');
 
-            // Tự động kích hoạt lệnh in ra máy in nhiệt mạng
-            setTimeout(() => {
-                triggerDirectPrint();
-            }, 500);
-        }, 250);
+            // Tự động kích hoạt lệnh in trực tiếp ra máy in tem nhiệt
+            autoDispatchPrint();
+        }, 200);
     })
     .catch(err => {
         btn.disabled = false;
@@ -1620,12 +1726,16 @@ if (btnConfirmExecute) {
         btn.disabled = true;
         btn.innerText = '⏳ Đang lưu & sinh mã QR...';
 
+        const printerSelect = document.getElementById('offcanvas_printer_select');
+        const selectedPrinter = printerSelect ? printerSelect.value : 'ZDesigner / Zebra (65x30mm)';
+
         const formData = new FormData();
         formData.append('order_id', currentOrder.id);
         formData.append('print_qty', currentCalculation.printQty);
         formData.append('is_odd_box', (currentCalculation.hasOdd && document.getElementById('oc_chk_odd_box').checked) ? 1 : 0);
         formData.append('admin_msnv', verifiedAdminMsnv || '');
         formData.append('admin_pass', verifiedAdminPass || '');
+        formData.append('printer_name', selectedPrinter);
         formData.append('note', document.getElementById('offcanvas_note').value.trim());
 
         fetch('ajax/submit_print.php', {
@@ -1672,7 +1782,12 @@ if (btnConfirmExecute) {
             // Hiển thị kết quả in tem
             renderPrintedLabels(data.labels);
             document.getElementById('res_box_count').innerText = data.labels.length;
+            const resPrinterEl = document.getElementById('res_printer_name');
+            if (resPrinterEl) resPrinterEl.innerText = selectedPrinter;
             openModal('modal_print_result');
+
+            // Tự động gửi lệnh in trực tiếp đến máy in
+            autoDispatchPrint();
         })
         .catch(err => {
             btn.disabled = false;
@@ -1722,16 +1837,36 @@ function updateTableRowAfterPrint(orderId, newPrinted, newRemaining, targetQty) 
     }
 }
 
-// RENDER DANH SÁCH TEM THÙNG RA GIAO DIỆN IN SATO 65x30MM
+// RENDER DANH SÁCH TEM THÙNG RA CẢ 2 VÙNG: PREVIEW VÀ STANDALONE PRINT ZONE
 function renderPrintedLabels(labels) {
-    const container = document.getElementById('printable_labels_container');
-    if (!container) return;
-    container.innerHTML = '';
+    console.group('[PRINT_DEBUG] QUY TRÌNH SINH VÀ RENDER TEM IN');
+    console.log('[PRINT_DEBUG 1] Dữ liệu tem đầu vào nhận từ máy chủ:', labels);
 
-    labels.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'box-label-item';
-        div.innerHTML = `
+    if (!Array.isArray(labels) || labels.length === 0) {
+        console.warn('[PRINT_DEBUG 1] Không có dữ liệu tem để render!');
+        console.groupEnd();
+        return;
+    }
+
+    // 1. Vùng xem trước trong modal
+    const previewContainer = document.getElementById('printable_labels_container');
+    if (previewContainer) {
+        previewContainer.innerHTML = '';
+    }
+
+    // 2. Vùng in độc lập gắn trực tiếp ở cấp cao nhất của document.body
+    let standaloneZone = document.getElementById('print_standalone_zone');
+    if (!standaloneZone) {
+        standaloneZone = document.createElement('div');
+        standaloneZone.id = 'print_standalone_zone';
+        standaloneZone.className = 'print-standalone-zone';
+        document.body.appendChild(standaloneZone);
+    }
+    standaloneZone.innerHTML = '';
+
+    labels.forEach((item, index) => {
+        // HTML của 1 tem chuẩn 65mm x 30mm
+        const labelHtml = `
             <div class="label-qr-col">
                 <img src="${item.qr_base64}" alt="QR" loading="eager">
             </div>
@@ -1743,11 +1878,93 @@ function renderPrintedLabels(labels) {
                 <div class="label-line-5">${escapeHtml(item.box_no)}</div>
             </div>
         `;
-        container.appendChild(div);
+
+        // Đưa vào preview container trên màn hình
+        if (previewContainer) {
+            const previewDiv = document.createElement('div');
+            previewDiv.className = 'box-label-item';
+            previewDiv.innerHTML = labelHtml;
+            previewContainer.appendChild(previewDiv);
+        }
+
+        // Đưa vào standalone print zone (dành riêng cho @media print, không bị modal ẩn)
+        const printDiv = document.createElement('div');
+        printDiv.className = 'box-label-item';
+        printDiv.innerHTML = labelHtml;
+        standaloneZone.appendChild(printDiv);
+    });
+
+    console.log('[PRINT_DEBUG 2] Render HTML hoàn tất:');
+    console.log(' - Preview container nodes:', previewContainer ? previewContainer.children.length : 0);
+    console.log(' - Standalone print zone nodes:', standaloneZone.children.length);
+    console.log(' - Mẫu HTML tem đầu tiên:', standaloneZone.firstElementChild ? standaloneZone.firstElementChild.outerHTML : '');
+    console.groupEnd();
+}
+
+// TỰ ĐỘNG GỬI LỆNH IN RA MÁY IN SAU KHI TẤT CẢ ẢNH QR ĐÃ NẠP SẴN SÀNG
+function autoDispatchPrint() {
+    console.group('[PRINT_DEBUG] KIỂM TRA ẢNH QR & GỬI LỆNH IN');
+    const standaloneZone = document.getElementById('print_standalone_zone');
+    const previewContainer = document.getElementById('printable_labels_container');
+
+    const targetZone = standaloneZone || previewContainer;
+    if (!targetZone) {
+        console.error('[PRINT_DEBUG 3] Không tìm thấy vùng in tem!');
+        console.groupEnd();
+        return;
+    }
+
+    const images = Array.from(targetZone.querySelectorAll('img'));
+    console.log('[PRINT_DEBUG 3] Tổng số ảnh QR cần kiểm tra:', images.length);
+
+    if (images.length === 0) {
+        console.warn('[PRINT_DEBUG 3] Không tìm thấy thẻ img QR nào trong vùng in!');
+        console.groupEnd();
+        setTimeout(triggerDirectPrint, 250);
+        return;
+    }
+
+    const imagePromises = images.map((img, idx) => {
+        // Kiểm tra hợp lệ của data URI
+        const isBase64 = img.src && img.src.startsWith('data:image/');
+        console.log(` - QR #${idx + 1}: Base64 Valid=${isBase64}, Length=${img.src ? img.src.length : 0}, Complete=${img.complete}`);
+
+        if (img.complete && img.naturalHeight !== 0) {
+            return Promise.resolve();
+        }
+
+        if (img.decode) {
+            return img.decode().catch(err => {
+                console.warn(` - QR #${idx + 1} decode warning:`, err);
+                return Promise.resolve();
+            });
+        }
+
+        return new Promise(resolve => {
+            img.onload = () => resolve();
+            img.onerror = () => {
+                console.error(` - QR #${idx + 1} load error!`);
+                resolve();
+            };
+        });
+    });
+
+    Promise.all(imagePromises).then(() => {
+        console.log('[PRINT_DEBUG 3] Toàn bộ ảnh QR đã nạp sẵn sàng 100%!');
+        console.log('[PRINT_DEBUG 4] Trạng thái DOM trước khi gọi print:');
+        console.log(' - Standalone Zone tồn tại:', !!standaloneZone);
+        console.log(' - Standalone Zone số tem:', standaloneZone ? standaloneZone.children.length : 0);
+        console.log('[PRINT_DEBUG 5] Thời điểm kích hoạt window.print():', new Date().toISOString());
+        console.groupEnd();
+
+        setTimeout(() => {
+            triggerDirectPrint();
+        }, 200);
     });
 }
 
 function triggerDirectPrint() {
+    console.log('[PRINT_DEBUG] Kích hoạt window.print() ngay bây giờ.');
     window.print();
 }
 
@@ -1994,18 +2211,45 @@ if (formImportOrders) {
             method: 'POST',
             body: formData
         })
-        .then(res => res.json())
+        .then(async response => {
+            const httpStatus = response.status;
+            const contentType = response.headers.get('content-type') || '';
+            const responseText = await response.text();
+
+            // Log detailed response information for debugging
+            console.log('[Import CTSX] HTTP Status:', httpStatus);
+            console.log('[Import CTSX] Content-Type:', contentType);
+            console.log('[Import CTSX] Response Body:', responseText);
+
+            // Validate HTTP Status and Content-Type before parsing JSON
+            if (!response.ok || !contentType.toLowerCase().includes('application/json')) {
+                console.error('[Import CTSX] Server returned non-JSON response:', { httpStatus, contentType, responseText });
+                throw new Error('INVALID_JSON_RESPONSE');
+            }
+
+            try {
+                return JSON.parse(responseText);
+            } catch (parseError) {
+                console.error('[Import CTSX] JSON parse error:', parseError, responseText);
+                throw new Error('INVALID_JSON_RESPONSE');
+            }
+        })
         .then(data => {
             if (submitBtn) {
                 submitBtn.disabled = false;
                 submitBtn.innerText = 'Bắt Đầu Import';
             }
-            if (data.success) {
-                closeModal('modal_import_excel');
+            if (data.message) {
                 alert(data.message);
-                location.reload();
+            } else if (data.errors && data.errors.length > 0) {
+                alert('Lỗi nạp file:\n' + data.errors.join('\n'));
             } else {
-                alert('Lỗi nạp file: ' + data.message + (data.errors ? '\n' + data.errors.join('\n') : ''));
+                alert('Có lỗi xảy ra trong quá trình nạp file!');
+            }
+
+            if (data.success || data.inserted_count > 0 || data.updated_count > 0) {
+                closeModal('modal_import_excel');
+                location.reload();
             }
         })
         .catch(err => {
@@ -2013,7 +2257,11 @@ if (formImportOrders) {
                 submitBtn.disabled = false;
                 submitBtn.innerText = 'Bắt Đầu Import';
             }
-            alert('Lỗi kết nối: ' + err.message);
+            if (err.message === 'INVALID_JSON_RESPONSE') {
+                alert('Không thể xử lý dữ liệu import. Vui lòng kiểm tra log hệ thống.');
+            } else {
+                alert('Lỗi kết nối: ' + err.message);
+            }
         });
     });
 }

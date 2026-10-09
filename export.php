@@ -9,10 +9,46 @@ require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/functions.php';
 
+$type = trim($_GET['type'] ?? 'history');
+
+// ========================================================
+// TẢI FILE MẪU IMPORT (UTF-8 KÈM BOM CHO EXCEL)
+// ========================================================
+if ($type === 'sample_orders') {
+    $filePath = __DIR__ . '/sample_orders.csv';
+    if (!file_exists($filePath)) {
+        http_response_code(404);
+        exit('File mẫu chỉ thị sản xuất không tồn tại!');
+    }
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="sample_orders.csv"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+    header('Cache-Control: no-store, no-cache, must-revalidate, post-check=0, pre-check=0');
+    header('Content-Length: ' . filesize($filePath));
+    readfile($filePath);
+    exit;
+}
+
+if ($type === 'sample_specs') {
+    $filePath = __DIR__ . '/sample_specs.csv';
+    if (!file_exists($filePath)) {
+        http_response_code(404);
+        exit('File mẫu quy cách đóng gói không tồn tại!');
+    }
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="sample_specs.csv"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+    header('Cache-Control: no-store, no-cache, must-revalidate, post-check=0, pre-check=0');
+    header('Content-Length: ' . filesize($filePath));
+    readfile($filePath);
+    exit;
+}
+
 requireAuth();
 
 $pdo = getDbConnection();
-$type = trim($_GET['type'] ?? 'history');
 
 if ($type === 'orders') {
     // ========================================================
