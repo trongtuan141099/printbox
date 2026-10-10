@@ -4,26 +4,45 @@
  * Cho phép Quản trị viên tùy biến cấu trúc chuỗi QR tem thùng:
  * Tiền tố, hậu tố, ký tự phân cách, thứ tự trường dữ liệu và định dạng ngày.
  */
-$pageTitle = "Cấu Hình Hệ Thống & Mã QR";
-require_once __DIR__ . '/includes/header.php';
+ob_start();
+
+require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/functions.php';
+
+// Kiểm tra bắt buộc đăng nhập và phân quyền Quản trị viên trước khi thao tác
+requireAuth();
 requireRole('admin');
 
 $pdo = getDbConnection();
-$currentSettings = getSystemSettings($pdo);
 
-// XỬ LÝ LƯU CẤU HÌNH
+// ========================================================
+// 1. XỬ LÝ LƯU CẤU HÌNH (POST: save_settings)
+// ========================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_settings') {
     $qrPrefix     = trim($_POST['qr_prefix'] ?? 'SMC4$');
     $qrDelimiter  = trim($_POST['qr_delimiter'] ?? '$');
     $qrSuffix     = trim($_POST['qr_suffix'] ?? '');
     $qrDateFormat = trim($_POST['qr_date_format'] ?? 'd/m/Y');
-    $selectedFields = $_POST['qr_fields'] ?? [];
+    $selectedTypes   = $_POST['qr_field_types'] ?? $_POST['qr_fields'] ?? [];
+    $selectedCustoms = $_POST['qr_field_customs'] ?? [];
 
-    if (!is_array($selectedFields)) {
-        $selectedFields = [];
+    $savedFields = [];
+    if (is_array($selectedTypes)) {
+        foreach ($selectedTypes as $idx => $type) {
+            $type = trim($type);
+            if ($type === '') continue;
+
+            if ($type === 'custom_fixed') {
+                $customVal = trim($selectedCustoms[$idx] ?? '');
+                $savedFields[] = 'custom_fixed:' . $customVal;
+            } else {
+                $savedFields[] = $type;
+            }
+        }
     }
 
-    $qrFieldsJson = json_encode(array_values($selectedFields), JSON_UNESCAPED_UNICODE);
+    $qrFieldsJson = json_encode(array_values($savedFields), JSON_UNESCAPED_UNICODE);
 
     try {
         updateSystemSetting('qr_prefix', $qrPrefix, $pdo);
@@ -47,24 +66,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
-// XỬ LÝ KHÔI PHỤC MẶC ĐỊNH
+// ========================================================
+// 2. XỬ LÝ KHÔI PHỤC MẶC ĐỊNH (POST: reset_defaults)
+// ========================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'reset_defaults') {
     $defaultFields = [
         'material_name', 'empty', 'qty', 'empty', 'empty', 'empty', 'empty',
         'box_no', 'invoice_no', 'order_no', 'bundle_no', 'weight',
         'input_date', 'lot_no', 'supplier'
     ];
-    updateSystemSetting('qr_prefix', 'SMC4$', $pdo);
+    updateSystemSetting('qr_prefix', 'SMC002$', $pdo);
     updateSystemSetting('qr_delimiter', '$', $pdo);
     updateSystemSetting('qr_suffix', '', $pdo);
     updateSystemSetting('qr_date_format', 'd/m/Y', $pdo);
     updateSystemSetting('qr_fields', json_encode($defaultFields), $pdo);
 
-    setFlash('info', 'Đã khôi phục cấu hình mã QR về mặc định chuẩn nhà máy SMC4!');
+    setFlash('info', 'Đã khôi phục cấu hình mã QR về mặc định chuẩn nhà máy SMC002!');
     header("Location: settings.php");
     exit;
 }
 
+// ========================================================
+// 3. TẢI DỮ LIỆU CẤU HÌNH CHO GIAO DIỆN HIỂN THỊ
+// ========================================================
+$currentSettings = getSystemSettings($pdo);
 $activeFields = json_decode($currentSettings['qr_fields'] ?? '[]', true) ?: [];
 
 // Danh mục tất cả các trường dữ liệu có sẵn
@@ -81,34 +106,42 @@ $availableFieldDefs = [
     'invoice_no'    => 'Số hóa đơn (Invoice No)',
     'order_no'      => 'Mã đơn PO (Order No)',
     'bundle_no'     => 'Số Bundle (Bundle No)',
+    'custom_fixed'  => '🔤 Ký tự cố định (Custom Fixed Text)',
+    'date_code_ym'  => '📅 Ký tự quy ước Năm/Tháng (Year/Month Code)',
+    'date_code_y'   => '📅 Ký tự quy ước Năm (Year Code)',
+    'date_code_m'   => '📅 Ký tự quy ước Tháng (Month Code)',
     'empty'         => 'Ô trống phân cách (Empty Slot)'
 ];
 
 // Sinh chuỗi mẫu xem trước
 $sampleQrStr = buildBoxQrContent([
-    'material_name' => 'SMC-VALVE-50A',
+    'material_name' => 'TU0425BU-20Z2',
     'qty'           => 10,
     'box_no'        => 'TU-' . date('ymd') . '-001',
-    'lot_no'        => 'LOT-A101',
-    'input_date'    => date('Y-m-d'),
-    'supplier'      => 'SMC Factory 1',
-    'weight'        => '2.50',
+    'lot_no'        => 'P260906297',
+    'input_date'    => date('Ymd'),
+    'supplier'      => 'SMC Factory 2',
+    'weight'        => '15',
     'issue_month'   => '10/2026',
-    'slip_code'     => 'PL-2610-01',
+    'slip_code'     => '579387',
     'invoice_no'    => '',
     'order_no'      => '',
     'bundle_no'     => ''
 ], $pdo);
 $sampleQrImg = generateQrDataUri($sampleQrStr, 6, 4);
+
+// NẠP GIAO DIỆN HEADER (CHỈ GỌI KHI KHÔNG CÓ REDIRECT)
+$pageTitle = "Cấu Hình Hệ Thống & Mã QR";
+require_once __DIR__ . '/includes/header.php';
 ?>
 
-<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+<div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
     <div>
-        <h1 class="h3 fw-bold text-dark mb-1">⚙️ Cấu Hình Mã QR &amp; Nhãn In Tem Thùng</h1>
-        <p class="text-secondary small mb-0">Tùy biến cấu trúc chuỗi dữ liệu mã QR &bull; Thứ tự trường dữ liệu &bull; Tiền tố &amp; Ký tự phân cách</p>
+        <h1 class="page-title m-0">⚙️ Cấu Hình Mã QR &amp; Nhãn In Tem Thùng</h1>
+        <p class="text-muted small mb-0 mt-1">Tùy biến cấu trúc chuỗi dữ liệu mã QR &bull; Thứ tự trường dữ liệu &bull; Tiền tố &amp; Ký tự phân cách</p>
     </div>
     <div>
-        <form method="POST" action="settings.php" onsubmit="return confirm('Khôi phục cấu trúc QR về mặc định chuẩn SMC4$?');" class="d-inline">
+        <form method="POST" action="settings.php" onsubmit="return confirm('Khôi phục cấu trúc QR về mặc định chuẩn SMC002$?');" class="d-inline">
             <input type="hidden" name="action" value="reset_defaults">
             <button type="submit" class="btn btn-outline-secondary btn-sm">
                 🔄 Khôi Phục Mặc Định
@@ -117,12 +150,12 @@ $sampleQrImg = generateQrDataUri($sampleQrStr, 6, 4);
     </div>
 </div>
 
-<div class="row g-4">
+<div class="row g-3">
     <!-- CỘT BÊN TRÁI: FORM CẤU HÌNH -->
     <div class="col-lg-7">
-        <div class="card border-0 shadow-sm rounded-3">
-            <div class="card-header bg-white py-3 border-bottom">
-                <h5 class="card-title mb-0 fw-bold text-primary">🛠️ Thiết Lập Cấu Trúc Mã QR</h5>
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-white py-2 px-3">
+                <span class="card-title fw-bold text-primary m-0">🛠️ Thiết Lập Cấu Trúc Mã QR</span>
             </div>
             <div class="card-body p-4">
                 <form method="POST" action="settings.php" id="settingsForm">
@@ -172,16 +205,35 @@ $sampleQrImg = generateQrDataUri($sampleQrStr, 6, 4);
                         <p class="text-muted small">Mã QR sẽ nối giá trị của các trường theo thứ tự từ trên xuống dưới bằng ký tự phân cách.</p>
 
                         <div id="fieldsListContainer" class="d-flex flex-column gap-2 p-2 bg-light rounded-3 border">
-                            <?php foreach ($activeFields as $idx => $fKey): ?>
+                            <?php foreach ($activeFields as $idx => $fieldItem): 
+                                $fType = $fieldItem;
+                                $fCustom = '';
+                                if (str_starts_with($fieldItem, 'custom_fixed:')) {
+                                    $fType = 'custom_fixed';
+                                    $fCustom = substr($fieldItem, 13);
+                                } elseif (str_starts_with($fieldItem, 'fixed:')) {
+                                    $fType = 'custom_fixed';
+                                    $fCustom = substr($fieldItem, 6);
+                                } elseif ($fieldItem === 'custom_fixed') {
+                                    $fType = 'custom_fixed';
+                                    $fCustom = '';
+                                }
+                                $isFixed = ($fType === 'custom_fixed');
+                            ?>
                                 <div class="field-item-row d-flex align-items-center gap-2 p-2 bg-white rounded border shadow-sm">
                                     <span class="badge bg-secondary-subtle text-dark-emphasis px-2 py-1 field-index"><?= $idx + 1 ?></span>
-                                    <select name="qr_fields[]" class="form-select form-select-sm field-select" onchange="updatePreview()">
+                                    <select name="qr_field_types[]" class="form-select form-select-sm field-select flex-grow-1" onchange="onFieldTypeChange(this)">
                                         <?php foreach ($availableFieldDefs as $k => $label): ?>
-                                            <option value="<?= $k ?>" <?= ($k === $fKey) ? 'selected' : '' ?>>
+                                            <option value="<?= $k ?>" <?= ($k === $fType) ? 'selected' : '' ?>>
                                                 <?= htmlspecialchars($label) ?>
                                             </option>
                                         <?php endforeach; ?>
                                     </select>
+                                    <input type="text" name="qr_field_customs[]" class="form-control form-control-sm field-custom-input" 
+                                           placeholder="Nhập ký tự (vd: YD)..." 
+                                           value="<?= htmlspecialchars($fCustom) ?>"
+                                           style="<?= $isFixed ? 'display:block;' : 'display:none;' ?> max-width: 170px;" 
+                                           oninput="updatePreview()" title="Ký tự cố định chèn vào vị trí này">
                                     <button type="button" class="btn btn-sm btn-outline-danger border-0" onclick="removeFieldRow(this)" title="Xóa vị trí này">
                                         ❌
                                     </button>
@@ -200,9 +252,9 @@ $sampleQrImg = generateQrDataUri($sampleQrStr, 6, 4);
 
     <!-- CỘT BÊN PHẢI: XEM TRƯỚC TRỰC QUAN (REAL-TIME PREVIEW) -->
     <div class="col-lg-5">
-        <div class="card border-0 shadow-sm rounded-3 sticky-top" style="top: 80px;">
-            <div class="card-header bg-white py-3 border-bottom">
-                <h5 class="card-title mb-0 fw-bold text-dark">👁️ Xem Trước Chuỗi QR &amp; Tem Nhãn</h5>
+        <div class="card shadow-sm sticky-top" style="top: 75px;">
+            <div class="card-header bg-white py-2 px-3">
+                <span class="card-title fw-bold text-dark m-0">👁️ Xem Trước Chuỗi QR &amp; Tem Nhãn</span>
             </div>
             <div class="card-body p-4 text-center">
                 <div class="mb-3">
@@ -226,10 +278,10 @@ $sampleQrImg = generateQrDataUri($sampleQrStr, 6, 4);
                                 <img id="previewMiniQr" src="<?= $sampleQrImg ?>" alt="QR">
                             </div>
                             <div class="label-text-col">
-                                <div class="label-line-1">SMC-VALVE-50A</div>
+                                <div class="label-line-1">TU0425BU-20Z2</div>
                                 <div class="label-line-2">10 pcs | 2.50 Kg</div>
                                 <div class="label-line-3">||</div>
-                                <div class="label-line-4">LOT-A101 | SMC Factory 1</div>
+                                <div class="label-line-4">P260906297 | SMC2</div>
                                 <div class="label-line-5">TU-<?= date('ymd') ?>-001</div>
                             </div>
                         </div>
@@ -257,15 +309,32 @@ function addFieldSlot() {
     row.className = 'field-item-row d-flex align-items-center gap-2 p-2 bg-white rounded border shadow-sm';
     row.innerHTML = `
         <span class="badge bg-secondary-subtle text-dark-emphasis px-2 py-1 field-index">${count}</span>
-        <select name="qr_fields[]" class="form-select form-select-sm field-select" onchange="updatePreview()">
+        <select name="qr_field_types[]" class="form-select form-select-sm field-select flex-grow-1" onchange="onFieldTypeChange(this)">
             ${optionsHtml}
         </select>
+        <input type="text" name="qr_field_customs[]" class="form-control form-control-sm field-custom-input" 
+               placeholder="Nhập ký tự (vd: YD)..." style="display:none; max-width: 170px;" oninput="updatePreview()" title="Ký tự cố định chèn vào vị trí này">
         <button type="button" class="btn btn-sm btn-outline-danger border-0" onclick="removeFieldRow(this)" title="Xóa vị trí này">
             ❌
         </button>
     `;
     container.appendChild(row);
     renumberFields();
+    updatePreview();
+}
+
+function onFieldTypeChange(selectEl) {
+    const row = selectEl.closest('.field-item-row');
+    if (!row) return;
+    const customInput = row.querySelector('.field-custom-input');
+    if (customInput) {
+        if (selectEl.value === 'custom_fixed') {
+            customInput.style.display = 'block';
+            customInput.focus();
+        } else {
+            customInput.style.display = 'none';
+        }
+    }
     updatePreview();
 }
 
@@ -304,14 +373,24 @@ function updatePreview() {
         'invoice_no': '',
         'order_no': '',
         'bundle_no': '',
+        'date_code_ym': '<?= getFactoryYearMonthCode() ?>',
+        'date_code_y': '<?= getFactoryYearCode() ?>',
+        'date_code_m': '<?= getFactoryMonthCode() ?>',
         'empty': ''
     };
 
-    const selects = document.querySelectorAll('.field-select');
+    const rows = document.querySelectorAll('.field-item-row');
     const parts = [];
-    selects.forEach(sel => {
+    rows.forEach(row => {
+        const sel = row.querySelector('.field-select');
+        const customInput = row.querySelector('.field-custom-input');
+        if (!sel) return;
         const val = sel.value;
-        parts.push(sampleValues[val] !== undefined ? sampleValues[val] : '');
+        if (val === 'custom_fixed') {
+            parts.push(customInput ? customInput.value : '');
+        } else {
+            parts.push(sampleValues[val] !== undefined ? sampleValues[val] : '');
+        }
     });
 
     const qrText = prefix + parts.join(delimiter) + suffix;

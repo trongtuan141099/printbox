@@ -184,16 +184,16 @@ $users = $pdo->query("SELECT * FROM `users` ORDER BY `id` ASC")->fetchAll();
     </div>
 </div>
 
-<div class="card shadow-sm border">
-    <div class="card-header bg-light d-flex justify-content-between align-items-center py-3">
-        <span class="card-title fw-bold text-dark mb-0">
+<div class="card shadow-sm">
+    <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
+        <span class="card-title fw-bold text-dark m-0">
             📋 Danh Sách Tài Khoản Hệ Thống (<span id="user_total_count"><?= count($users) ?></span> tài khoản)
         </span>
     </div>
     <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-striped table-hover align-middle mb-0" id="users_table">
-                <thead class="table-dark">
+        <div class="table-responsive table-sticky-container">
+            <table class="table table-hover align-middle mb-0 table-sticky" id="users_table">
+                <thead class="table-light table-sticky-header">
                     <tr>
                         <th style="width:60px;" class="text-center">ID</th>
                         <th>Họ Và Tên</th>

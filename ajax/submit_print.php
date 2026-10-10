@@ -80,8 +80,21 @@ try {
         exit;
     }
 
-    $packQty = (int)$order['pack_qty'];
+    // Tra cứu quy cách đóng gói động dựa theo Loại Thùng (box_type)
+    $boxType = trim($_POST['box_type'] ?? '');
+    if (empty($boxType)) {
+        $boxType = !empty($order['box_type']) ? $order['box_type'] : '1';
+    }
+
+    $spec = getProductSpec($order['product_code'], $boxType, $pdo);
+    $packQty = (int)$spec['pack_qty'];
+    if ($packQty <= 0) $packQty = (int)$order['pack_qty'];
     if ($packQty <= 0) $packQty = 1;
+
+    $weightPerBox = (float)$spec['weight_per_box'];
+    if ($weightPerBox <= 0) $weightPerBox = (float)$order['weight_per_box'];
+
+    $orderSupplier = !empty($spec['supplier']) ? $spec['supplier'] : ($order['supplier'] ?? '');
 
     $remainingQty = (int)$order['remaining_qty'];
     $isOverTarget = 0;
@@ -145,7 +158,7 @@ try {
             'success' => false,
             'require_odd_confirm' => true,
             'odd_qty' => $oddQty,
-            'message' => "CẢNH BÁO THÙNG LẺ: Số lượng in ({$printQty}) dư {$oddQty} con lẻ (Quy cách {$packQty} con/thùng). Bạn phải tích chọn 'Cho phép in thùng lẻ' để xác nhận trước khi in!"
+            'message' => "CẢNH BÁO THÙNG LẺ: Số lượng in ({$printQty}) dư {$oddQty} con lẻ (Quy cách {$packQty} con/thùng theo Thùng loại {$boxType}). Bạn phải tích chọn 'Cho phép in thùng lẻ' để xác nhận trước khi in!"
         ]);
         exit;
     }
@@ -162,25 +175,27 @@ try {
                              SET `printed_qty` = ?, 
                                  `remaining_qty` = ?, 
                                  `status` = ?, 
+                                 `box_type` = ?,
                                  `updated_at` = NOW() 
                              WHERE `id` = ?");
-    $stmtUpd->execute([$newPrintedQty, $newRemainingQty, $newStatus, $orderId]);
+    $stmtUpd->execute([$newPrintedQty, $newRemainingQty, $newStatus, $boxType, $orderId]);
 
     // LƯU LỊCH SỬ IN (PRINT_HISTORY)
-    $auditNote = !empty($note) ? ($note . ' | [Trạng thái: Đã gửi lệnh in (Printed)]') : '[Trạng thái: Đã gửi lệnh in (Printed)]';
+    $auditNote = !empty($note) ? ($note . " | [Thùng loại {$boxType}] [Trạng thái: Đã gửi lệnh in (Printed)]") : "[Thùng loại {$boxType}] [Trạng thái: Đã gửi lệnh in (Printed)]";
 
     $stmtHist = $pdo->prepare("INSERT INTO `print_history` 
-        (`order_id`, `slip_code`, `order_code`, `product_code`, `print_qty`, `pack_qty`, 
+        (`order_id`, `slip_code`, `order_code`, `product_code`, `box_type`, `print_qty`, `pack_qty`, 
          `box_count`, `is_odd_box`, `odd_qty`, `box_numbers`, `qr_data_sample`, 
          `is_over_target`, `approved_by_id`, `approved_by_msnv`, `operator_id`, `operator_name`, 
          `operator_msnv`, `printer_destination`, `note`, `created_at`) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
 
     $stmtHist->execute([
         $orderId,
         $order['slip_code'],
         $order['order_code'],
         $order['product_code'],
+        $boxType,
         $printQty,
         $packQty,
         $totalBoxes,
@@ -203,8 +218,8 @@ try {
     // SINH CHI TIẾT TỪNG TEM THÙNG VÀ MÃ QR
     $labels = [];
     $stmtLabel = $pdo->prepare("INSERT INTO `box_labels` 
-        (`history_id`, `box_no`, `order_code`, `product_code`, `qty`, `weight`, `input_date`, `qr_content`, `created_at`) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+        (`history_id`, `box_no`, `order_code`, `product_code`, `box_type`, `qty`, `weight`, `input_date`, `qr_content`, `created_at`) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
 
     $todayFormatted = date('d/m/Y');
     $todayDb = date('Y-m-d');
@@ -219,15 +234,15 @@ try {
 
         // Trọng lượng tỉ lệ theo số lượng nếu có
         $weightStr = '';
-        if ((float)$order['weight_per_box'] > 0) {
-            $calcWeight = round(((float)$order['weight_per_box'] / $packQty) * $currentBoxQty, 2);
+        if ($weightPerBox > 0) {
+            $calcWeight = round(($weightPerBox / $packQty) * $currentBoxQty, 2);
             $weightStr = number_format($calcWeight, 2, '.', '');
         }
 
         // Tạo nội dung QR Code theo chuẩn nhà máy
         $qrData = [
             'material_name' => $order['product_code'],
-            'supplier'      => $order['supplier'] ?? '',
+            'supplier'      => $orderSupplier,
             'bundle_no'     => $order['bundle_no'] ?? '',
             'lot_no'        => $order['order_code'],
             'input_date'    => $todayFormatted,
@@ -237,7 +252,8 @@ try {
             'order_no'      => $order['order_no'] ?? '',
             'box_no'        => $boxNo,
             'issue_month'   => $order['issue_month'] ?? '',
-            'slip_code'     => $order['slip_code'] ?? ''
+            'slip_code'     => $order['slip_code'] ?? '',
+            'box_type'      => $boxType
         ];
 
         $qrContent = buildBoxQrContent($qrData, $pdo);
@@ -254,6 +270,7 @@ try {
             $boxNo,
             $order['order_code'],
             $order['product_code'],
+            $boxType,
             $currentBoxQty,
             $weightStr,
             $todayDb,
@@ -262,11 +279,12 @@ try {
 
         $labels[] = [
             'box_no'        => $boxNo,
+            'box_type'      => $boxType,
             'material_name' => $order['product_code'],
             'lot_no'        => $order['order_code'],
             'qty'           => $currentBoxQty,
             'weight'        => $weightStr,
-            'supplier'      => $order['supplier'] ?? '',
+            'supplier'      => $orderSupplier,
             'input_date'    => $todayFormatted,
             'is_odd'        => $isLastAndOdd,
             'qr_base64'     => $qrBase64,

@@ -27,9 +27,16 @@ try {
     $pdo = getDbConnection();
     
     // 1. Tìm kiếm chính xác mã phiếu hoặc mã chỉ thị (Sử dụng 2 tham số riêng biệt :slip_exact và :order_exact)
-    $stmt = $pdo->prepare("SELECT * FROM `production_orders` 
-                           WHERE `slip_code` = :slip_exact OR `order_code` = :order_exact 
-                           LIMIT 1");
+    $sqlExact = "SELECT po.*, 
+                        COALESCE(ps.pack_qty, po.pack_qty) AS pack_qty,
+                        COALESCE(ps.supplier, po.supplier) AS supplier,
+                        COALESCE(ps.weight_per_box, po.weight_per_box) AS weight_per_box,
+                        COALESCE(ps.unit, 'pcs') AS unit
+                 FROM `production_orders` po 
+                 LEFT JOIN `product_specs` ps ON po.product_code = ps.product_code AND po.box_type = ps.box_type
+                 WHERE po.`slip_code` = :slip_exact OR po.`order_code` = :order_exact 
+                 LIMIT 1";
+    $stmt = $pdo->prepare($sqlExact);
     $stmt->execute([
         ':slip_exact'  => $query,
         ':order_exact' => $query
@@ -39,9 +46,16 @@ try {
     // 2. Tìm kiếm gần đúng nếu chưa tìm thấy chính xác (2 tham số riêng biệt :slip_like và :order_like)
     if (!$order) {
         $likePattern = "%{$query}%";
-        $stmtLike = $pdo->prepare("SELECT * FROM `production_orders` 
-                                   WHERE `slip_code` LIKE :slip_like OR `order_code` LIKE :order_like 
-                                   LIMIT 1");
+        $sqlLike = "SELECT po.*, 
+                           COALESCE(ps.pack_qty, po.pack_qty) AS pack_qty,
+                           COALESCE(ps.supplier, po.supplier) AS supplier,
+                           COALESCE(ps.weight_per_box, po.weight_per_box) AS weight_per_box,
+                           COALESCE(ps.unit, 'pcs') AS unit
+                    FROM `production_orders` po 
+                    LEFT JOIN `product_specs` ps ON po.product_code = ps.product_code AND po.box_type = ps.box_type
+                    WHERE po.`slip_code` LIKE :slip_like OR po.`order_code` LIKE :order_like 
+                    LIMIT 1";
+        $stmtLike = $pdo->prepare($sqlLike);
         $stmtLike->execute([
             ':slip_like'  => $likePattern,
             ':order_like' => $likePattern
@@ -59,6 +73,7 @@ try {
                 'slip_code'      => $order['slip_code'],
                 'order_code'     => $order['order_code'],
                 'product_code'   => $order['product_code'],
+                'box_type'       => $order['box_type'] ?? '1',
                 'target_qty'     => (int)$order['target_qty'],
                 'printed_qty'    => (int)$order['printed_qty'],
                 'remaining_qty'  => (int)$order['remaining_qty'],

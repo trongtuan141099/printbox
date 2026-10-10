@@ -64,59 +64,81 @@ $historyList = $stmt->fetchAll();
 
 // Chuỗi tham số xuất Excel
 $queryString = http_build_query($_GET);
+$exportQuery = http_build_query(array_merge($_GET, ['type' => 'history']));
+$hasFilter   = (!empty($fromDate) || !empty($toDate) || !empty($slipCode) || !empty($orderCode) || !empty($productCode) || $operatorId > 0 || $isOverTarget !== '');
 ?>
 
-<div class="page-header">
+<div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
     <div>
-        <h1 class="page-title">📜 Lịch Sử In Tem Sản Xuất</h1>
-        <!-- <p style="color:var(--text-muted);font-size:14px;margin-top:2px;">
-            Tra cứu vết in tem thùng &bull; Chi tiết Box No &bull; In lại nhãn (Reprint) &bull; Xuất báo cáo Excel
-        </p> -->
+        <h1 class="page-title m-0">📜 Lịch Sử In Tem Sản Xuất</h1>
     </div>
-    <div class="page-actions">
-        <a href="export.php?<?= $queryString ?>" class="btn btn-success">
+    <div class="page-actions d-flex flex-wrap gap-2">
+        <a href="export.php?<?= $exportQuery ?>" class="btn btn-sm btn-outline-success fw-bold" title="Xuất toàn bộ dữ liệu lịch sử theo điều kiện lọc ra Excel / CSV">
             📊 Xuất Dữ Liệu Excel / CSV
         </a>
-        <!-- <a href="orders.php" class="btn btn-primary">
-            📋 Chỉ Thị SX &amp; In Tem
-        </a> -->
     </div>
 </div>
 
-<!-- KHỐI BỘ LỌC TÌM KIẾM NÂNG CAO -->
-<div class="card" style="margin-bottom:20px;">
-    <div class="card-header">
-        <span class="card-title">🔍 Bộ Lọc Tìm Kiếm Nâng Cao</span>
+<!-- KHỐI BỘ LỌC TÌM KIẾM THEO CHIỀU NGANG (HORIZONTAL INLINE FILTER LAYOUT) -->
+<div class="card filter-card shadow-sm mb-2">
+    <div class="card-header bg-white py-1 px-3 d-flex justify-content-between align-items-center">
+        <span class="card-title fw-bold text-dark m-0" style="font-size: 13.5px;">
+            🔍 Bộ Lọc Tìm Kiếm Nâng Cao
+        </span>
+        <div class="d-flex align-items-center gap-2">
+            <?php if ($hasFilter): ?>
+                <span class="badge bg-primary text-white" style="font-size: 10.5px;">
+                    Đang lọc dữ liệu
+                </span>
+            <?php endif; ?>
+            <span class="text-muted" style="font-size: 12px;">
+                Tìm thấy: <strong class="text-dark"><?= count($historyList) ?></strong> lượt in (tối đa 200)
+            </span>
+        </div>
     </div>
     <div class="card-body">
-        <form method="GET" action="history.php">
-            <div class="grid-4" style="margin-bottom:14px;">
-                <div class="form-group" style="margin-bottom:0;">
-                    <label class="form-label">Từ ngày</label>
-                    <input type="date" name="from_date" class="form-control" value="<?= htmlspecialchars($fromDate) ?>">
+        <form method="GET" action="history.php" class="filter-form-horizontal">
+            <!-- HÀNG 1: THỜI GIAN & MÃ CHỈ THỊ (4 CỘT NGANG) -->
+            <div class="row g-2 align-items-end mb-2">
+                <div class="col-12 col-sm-6 col-md-3">
+                    <label class="form-label-compact">
+                        📅 Từ ngày:
+                    </label>
+                    <input type="date" name="from_date" class="form-control form-control-compact" value="<?= htmlspecialchars($fromDate) ?>">
                 </div>
-                <div class="form-group" style="margin-bottom:0;">
-                    <label class="form-label">Đến ngày</label>
-                    <input type="date" name="to_date" class="form-control" value="<?= htmlspecialchars($toDate) ?>">
+                <div class="col-12 col-sm-6 col-md-3">
+                    <label class="form-label-compact">
+                        📅 Đến ngày:
+                    </label>
+                    <input type="date" name="to_date" class="form-control form-control-compact" value="<?= htmlspecialchars($toDate) ?>">
                 </div>
-                <div class="form-group" style="margin-bottom:0;">
-                    <label class="form-label">Mã phiếu chỉ thị</label>
-                    <input type="text" name="slip_code" class="form-control" placeholder="vd: PL-2610-01" value="<?= htmlspecialchars($slipCode) ?>">
+                <div class="col-12 col-sm-6 col-md-3">
+                    <label class="form-label-compact">
+                        📑 Mã phiếu chỉ thị:
+                    </label>
+                    <input type="text" name="slip_code" class="form-control form-control-compact font-monospace" placeholder="vd: PL-2610-01..." value="<?= htmlspecialchars($slipCode) ?>">
                 </div>
-                <div class="form-group" style="margin-bottom:0;">
-                    <label class="form-label">Mã chỉ thị (Lot No)</label>
-                    <input type="text" name="order_code" class="form-control" placeholder="vd: LOT-A101" value="<?= htmlspecialchars($orderCode) ?>">
+                <div class="col-12 col-sm-6 col-md-3">
+                    <label class="form-label-compact">
+                        🏷️ Mã chỉ thị (Lot No):
+                    </label>
+                    <input type="text" name="order_code" class="form-control form-control-compact font-monospace" placeholder="vd: LOT-A101..." value="<?= htmlspecialchars($orderCode) ?>">
                 </div>
             </div>
 
-            <div class="grid-4" style="align-items:flex-end;">
-                <div class="form-group" style="margin-bottom:0;">
-                    <label class="form-label">Mã sản phẩm</label>
-                    <input type="text" name="product_code" class="form-control" placeholder="vd: SMC-VALVE" value="<?= htmlspecialchars($productCode) ?>">
+            <!-- HÀNG 2: MÃ SẢN PHẨM, NHÂN VIÊN, ĐỊNH MỨC & NÚT THAO TÁC (4 CỘT NGANG CÂN ĐỐI) -->
+            <div class="row g-2 align-items-end">
+                <div class="col-12 col-sm-6 col-md-3">
+                    <label class="form-label-compact">
+                        📦 Mã sản phẩm:
+                    </label>
+                    <input type="text" name="product_code" class="form-control form-control-compact font-monospace" placeholder="vd: SMC-VALVE..." value="<?= htmlspecialchars($productCode) ?>">
                 </div>
-                <div class="form-group" style="margin-bottom:0;">
-                    <label class="form-label">Người thực hiện</label>
-                    <select name="operator_id" class="form-control">
+                <div class="col-12 col-sm-6 col-md-3">
+                    <label class="form-label-compact">
+                        👤 Người thực hiện:
+                    </label>
+                    <select name="operator_id" class="form-select form-select-compact">
                         <option value="">-- Tất cả nhân viên --</option>
                         <?php foreach ($operators as $op): ?>
                             <option value="<?= $op['id'] ?>" <?= ($operatorId === (int)$op['id']) ? 'selected' : '' ?>>
@@ -125,17 +147,33 @@ $queryString = http_build_query($_GET);
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="form-group" style="margin-bottom:0;">
-                    <label class="form-label">Tình trạng định mức</label>
-                    <select name="is_over_target" class="form-control">
+                <div class="col-12 col-sm-6 col-md-2">
+                    <label class="form-label-compact">
+                        ⚖️ Tình trạng định mức:
+                    </label>
+                    <select name="is_over_target" class="form-select form-select-compact">
                         <option value="">-- Tất cả --</option>
                         <option value="0" <?= ($isOverTarget === '0') ? 'selected' : '' ?>>Đúng định mức</option>
-                        <option value="1" <?= ($isOverTarget === '1') ? 'selected' : '' ?>>Vượt định mức (Đã duyệt)</option>
+                        <option value="1" <?= ($isOverTarget === '1') ? 'selected' : '' ?>>Vượt định mức</option>
                     </select>
                 </div>
-                <div style="display:flex;gap:8px;">
-                    <button type="submit" class="btn btn-primary" style="flex:1;">🔍 Lọc Dữ Liệu</button>
-                    <a href="history.php" class="btn btn-secondary">✖ Bỏ Lọc</a>
+                <div class="col-12 col-sm-6 col-md-4">
+                    <label class="form-label-compact">
+                        ⚡ Thao tác:
+                    </label>
+                    <div class="d-flex gap-1 align-items-center">
+                        <button type="submit" class="btn btn-primary btn-filter-action flex-grow-1" title="Áp dụng lọc dữ liệu">
+                            🔍 Lọc Dữ Liệu
+                        </button>
+                        <a href="export.php?<?= $exportQuery ?>" class="btn btn-success btn-filter-action flex-grow-1" title="Xuất dữ liệu Excel / CSV theo điều kiện lọc hiện tại">
+                            📊 Xuất Excel
+                        </a>
+                        <?php if ($hasFilter): ?>
+                            <a href="history.php" class="btn btn-outline-secondary btn-filter-action" title="Xóa toàn bộ điều kiện lọc, hiển thị mặc định">
+                                ✖ Bỏ Lọc
+                            </a>
+                        <?php endif; ?>
+                    </div>
                 </div>
             </div>
         </form>
@@ -143,26 +181,26 @@ $queryString = http_build_query($_GET);
 </div>
 
 <!-- BẢNG KẾT QUẢ LỊCH SỬ -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">Kết Quả Lịch Sử In (<?= count($historyList) ?> lượt in)</span>
+<div class="card shadow-sm">
+    <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
+        <span class="card-title fw-bold text-dark m-0">Kết Quả Lịch Sử In (<?= count($historyList) ?> lượt in)</span>
     </div>
-    <div class="card-body" style="padding:0;">
-        <div class="table-responsive">
-            <table class="table table-striped">
-                <thead>
+    <div class="card-body p-0">
+        <div class="table-responsive table-sticky-container">
+            <table class="table table-hover align-middle mb-0 table-sticky">
+                <thead class="table-light table-sticky-header">
                     <tr>
-                        <th style="width:60px;">ID</th>
+                        <th style="width:55px;" class="text-center">ID</th>
                         <th>Thời Gian</th>
                         <th>Mã Phiếu &amp; Chỉ Thị</th>
                         <th>Mã Sản Phẩm</th>
-                        <th style="text-align:right;">SL In</th>
-                        <th style="text-align:center;">Số Tem Thùng</th>
+                        <th class="text-end">SL In</th>
+                        <th class="text-center">Số Tem Thùng</th>
                         <th>Phân Loại Thùng</th>
                         <th>Danh Sách Box No</th>
-                        <th style="text-align:center;">Định Mức</th>
+                        <th class="text-center">Định Mức</th>
                         <th>Người Thực Hiện</th>
-                        <th style="text-align:center;width:120px;">Thao Tác</th>
+                        <th class="text-center" style="width:110px;">Thao Tác</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -234,7 +272,7 @@ $queryString = http_build_query($_GET);
                                 <div style="font-size:11px;color:var(--text-muted);"><?= htmlspecialchars($row['operator_msnv']) ?></div>
                             </td>
                             <td style="text-align:center;">
-                                <a href="print_labels.php?history_id=<?= $row['id'] ?>" target="_blank" class="btn btn-sm btn-secondary" title="In lại bộ tem này">
+                                <a href="print_labels.php?history_id=<?= $row['id'] ?>" target="_blank" class="btn btn-sm btn-outline-primary" title="In lại bộ tem này">
                                     🖨️ In Lại
                                 </a>
                             </td>

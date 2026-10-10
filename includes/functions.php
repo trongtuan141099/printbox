@@ -58,17 +58,20 @@ function updateSystemSetting($key, $value, PDO $pdo = null) {
 }
 
 /**
- * Tra cứu quy cách đóng gói tự động từ bảng product_specs theo Mã Sản Phẩm
+ * Tra cứu quy cách đóng gói tự động từ bảng product_specs theo Mã Sản Phẩm và Loại Thùng
  * @param string $productCode Mã sản phẩm
+ * @param string $boxType Phân loại thùng (mặc định '1')
  * @param PDO|null $pdo
  * @return array
  */
-function getProductSpec($productCode, PDO $pdo = null) {
+function getProductSpec($productCode, $boxType = '1', PDO $pdo = null) {
     if ($pdo === null) $pdo = getDbConnection();
     $productCode = trim($productCode);
+    $boxType     = trim((string)$boxType) ?: '1';
 
     $fallback = [
         'product_code'   => $productCode,
+        'box_type'       => $boxType,
         'pack_qty'       => 1,
         'supplier'       => '',
         'weight_per_box' => 0.000,
@@ -80,13 +83,22 @@ function getProductSpec($productCode, PDO $pdo = null) {
         return $fallback;
     }
 
-    $stmt = $pdo->prepare("SELECT * FROM `product_specs` WHERE `product_code` = ? LIMIT 1");
-    $stmt->execute([$productCode]);
+    // 1. Ưu tiên tra cứu chính xác theo cặp (product_code, box_type)
+    $stmt = $pdo->prepare("SELECT * FROM `product_specs` WHERE `product_code` = ? AND `box_type` = ? LIMIT 1");
+    $stmt->execute([$productCode, $boxType]);
     $spec = $stmt->fetch();
+
+    // 2. Nếu chưa có loại thùng này, fallback sang bất kỳ cấu hình nào của sản phẩm đó
+    if (!$spec) {
+        $stmt = $pdo->prepare("SELECT * FROM `product_specs` WHERE `product_code` = ? ORDER BY `box_type` ASC LIMIT 1");
+        $stmt->execute([$productCode]);
+        $spec = $stmt->fetch();
+    }
 
     if ($spec) {
         return [
             'product_code'   => $spec['product_code'],
+            'box_type'       => $spec['box_type'] ?? $boxType,
             'pack_qty'       => max(1, (int)$spec['pack_qty']),
             'supplier'       => $spec['supplier'] ?? '',
             'weight_per_box' => (float)$spec['weight_per_box'],
@@ -101,15 +113,23 @@ function getProductSpec($productCode, PDO $pdo = null) {
 /**
  * Check if a product specification exists in product_specs table
  * @param string $productCode
+ * @param string|null $boxType
  * @param PDO|null $pdo
  * @return bool
  */
-function hasProductSpec($productCode, PDO $pdo = null) {
+function hasProductSpec($productCode, $boxType = null, PDO $pdo = null) {
     if ($pdo === null) $pdo = getDbConnection();
     $productCode = trim($productCode);
     if (empty($productCode)) {
         return false;
     }
+
+    if ($boxType !== null && $boxType !== '') {
+        $stmt = $pdo->prepare("SELECT id FROM `product_specs` WHERE `product_code` = ? AND `box_type` = ? LIMIT 1");
+        $stmt->execute([$productCode, trim((string)$boxType)]);
+        return (bool)$stmt->fetchColumn();
+    }
+
     $stmt = $pdo->prepare("SELECT id FROM `product_specs` WHERE `product_code` = ? LIMIT 1");
     $stmt->execute([$productCode]);
     return (bool)$stmt->fetchColumn();
@@ -118,21 +138,34 @@ function hasProductSpec($productCode, PDO $pdo = null) {
 /**
  * Get product spec if exists, otherwise returns null
  * @param string $productCode
+ * @param string|null $boxType
  * @param PDO|null $pdo
  * @return array|null
  */
-function getProductSpecStrict($productCode, PDO $pdo = null) {
+function getProductSpecStrict($productCode, $boxType = null, PDO $pdo = null) {
     if ($pdo === null) $pdo = getDbConnection();
     $productCode = trim($productCode);
     if (empty($productCode)) {
         return null;
     }
-    $stmt = $pdo->prepare("SELECT * FROM `product_specs` WHERE `product_code` = ? LIMIT 1");
-    $stmt->execute([$productCode]);
-    $spec = $stmt->fetch();
+
+    $spec = null;
+    if ($boxType !== null && $boxType !== '') {
+        $stmt = $pdo->prepare("SELECT * FROM `product_specs` WHERE `product_code` = ? AND `box_type` = ? LIMIT 1");
+        $stmt->execute([$productCode, trim((string)$boxType)]);
+        $spec = $stmt->fetch();
+    }
+
+    if (!$spec) {
+        $stmt = $pdo->prepare("SELECT * FROM `product_specs` WHERE `product_code` = ? ORDER BY `box_type` ASC LIMIT 1");
+        $stmt->execute([$productCode]);
+        $spec = $stmt->fetch();
+    }
+
     if ($spec) {
         return [
             'product_code'   => $spec['product_code'],
+            'box_type'       => $spec['box_type'] ?? '1',
             'pack_qty'       => max(1, (int)$spec['pack_qty']),
             'supplier'       => $spec['supplier'] ?? '',
             'weight_per_box' => (float)$spec['weight_per_box'],
@@ -188,8 +221,82 @@ function generateDailyBoxNumbers($count, $pdo) {
 }
 
 /**
+ * Chuyển đổi mã năm theo quy ước nhà máy công nghiệp (ví dụ: năm 2026 -> 'Y')
+ * @param int|string|null $year
+ * @return string
+ */
+function getFactoryYearCode($year = null) {
+    $year = $year ? (int)$year : (int)date('Y');
+    // Bảng quy ước chữ cái đại diện cho năm công nghiệp
+    $yearMap = [
+        2020 => 'S', 2021 => 'T', 2022 => 'U', 2023 => 'V', 2024 => 'W', 2025 => 'X',
+        2026 => 'Y', 2027 => 'Z', 2028 => 'A', 2029 => 'B', 2030 => 'C'
+    ];
+    if (isset($yearMap[$year])) {
+        return $yearMap[$year];
+    }
+    $offset = ($year - 2002) % 26;
+    if ($offset < 0) $offset += 26;
+    return chr(65 + $offset);
+}
+
+/**
+ * Chuyển đổi mã tháng theo quy ước nhà máy công nghiệp (ví dụ: tháng 10 -> 'D', tháng 12 -> 'A')
+ * @param int|string|null $month
+ * @return string
+ */
+function getFactoryMonthCode($month = null) {
+    $month = $month ? (int)$month : (int)date('n');
+    $monthMap = [
+        1  => '1',
+        2  => '2',
+        3  => '3',
+        4  => '4',
+        5  => '5',
+        6  => '6',
+        7  => '7',
+        8  => '8',
+        9  => '9',
+        10 => 'D', // Quy ước tháng 10 -> 'D'
+        11 => 'B',
+        12 => 'A'  // Quy ước tháng 12 -> 'A'
+    ];
+    return $monthMap[$month] ?? (string)$month;
+}
+
+/**
+ * Chuyển đổi mã ngày theo quy ước nhà máy công nghiệp (ví dụ: ngày 10 là chữ 'f')
+ * @param int|string|null $day
+ * @return string
+ */
+function getFactoryDayCode($day = null) {
+    $day = $day ? (int)$day : (int)date('j');
+    $dayMap = [
+        1  => '1', 2  => '2', 3  => '3', 4  => '4', 5  => '5', 
+        6  => '6', 7  => '7', 8  => '8', 9  => '9',
+        10 => 'f', // Quy ước ngày 10 -> 'f'
+        11 => 'g', 12 => 'h', 13 => 'i', 14 => 'j', 15 => 'k',
+        16 => 'l', 17 => 'm', 18 => 'n', 19 => 'p', 20 => 'q',
+        21 => 'r', 22 => 's', 23 => 't', 24 => 'u', 25 => 'v',
+        26 => 'w', 27 => 'x', 28 => 'y', 29 => 'z', 30 => 'A',
+        31 => 'B'
+    ];
+    return $dayMap[$day] ?? sprintf('%02d', $day);
+}
+
+/**
+ * Lấy ký tự quy ước Năm + Tháng hiện tại (ví dụ: 10/2026 -> 'YD', 12/2026 -> 'YA')
+ * @param int|string|null $year
+ * @param int|string|null $month
+ * @return string
+ */
+function getFactoryYearMonthCode($year = null, $month = null) {
+    return getFactoryYearCode($year) . getFactoryMonthCode($month);
+}
+
+/**
  * Tạo chuỗi nội dung mã QR động theo cấu hình hệ thống (Admin Settings)
- * Hỗ trợ tiền tố, hậu tố, ký tự phân cách và thứ tự trường dữ liệu tùy biến
+ * Hỗ trợ tiền tố, hậu tố, ký tự phân cách, thứ tự trường dữ liệu, ký tự cố định và quy ước thời gian
  * @param array $data Dữ liệu tem
  * @param PDO|null $pdo
  * @return string
@@ -218,6 +325,20 @@ function buildBoxQrContent(array $data, PDO $pdo = null) {
     $timestamp = strtotime($rawDate) ?: time();
     $formattedDate = date($dateFormat, $timestamp);
 
+    // Xác định năm và tháng phục vụ quy ước mã ký tự động
+    $targetYear = (int)date('Y');
+    $targetMonth = (int)date('n');
+    if (!empty($data['issue_month']) && preg_match('#^(\d{1,2})/(\d{4})$#', trim($data['issue_month']), $m)) {
+        $targetMonth = (int)$m[1];
+        $targetYear  = (int)$m[2];
+    } elseif (!empty($data['input_date'])) {
+        $ts = strtotime($data['input_date']);
+        if ($ts) {
+            $targetYear  = (int)date('Y', $ts);
+            $targetMonth = (int)date('n', $ts);
+        }
+    }
+
     // Bảng giá trị các trường
     $valuesMap = [
         'material_name' => trim($data['material_name'] ?? $data['product_code'] ?? ''),
@@ -234,14 +355,35 @@ function buildBoxQrContent(array $data, PDO $pdo = null) {
         'supplier'      => trim($data['supplier'] ?? ''),
         'issue_month'   => trim($data['issue_month'] ?? ''),
         'slip_code'     => trim($data['slip_code'] ?? ''),
+        'date_code_ym'  => getFactoryYearMonthCode($targetYear, $targetMonth),
+        'date_code_y'   => getFactoryYearCode($targetYear),
+        'date_code_m'   => getFactoryMonthCode($targetMonth),
         'empty'         => '',
         ''              => ''
     ];
 
     $parts = [];
-    foreach ($fieldsOrder as $fieldKey) {
-        $key = trim($fieldKey);
-        $val = $valuesMap[$key] ?? '';
+    foreach ($fieldsOrder as $fieldItem) {
+        $val = '';
+        if (is_array($fieldItem)) {
+            $key = trim($fieldItem['key'] ?? $fieldItem['type'] ?? '');
+            $customVal = trim($fieldItem['value'] ?? $fieldItem['custom'] ?? '');
+            if ($key === 'custom_fixed' || $key === 'fixed') {
+                $val = $customVal;
+            } else {
+                $val = $valuesMap[$key] ?? '';
+            }
+        } else {
+            $itemStr = trim((string)$fieldItem);
+            if (str_starts_with($itemStr, 'custom_fixed:')) {
+                $val = substr($itemStr, 13);
+            } elseif (str_starts_with($itemStr, 'fixed:')) {
+                $val = substr($itemStr, 6);
+            } else {
+                $val = $valuesMap[$itemStr] ?? '';
+            }
+        }
+
         // Loại bỏ ký tự xuống dòng và tab làm hỏng cấu trúc dữ liệu QR
         $val = str_replace(["\r", "\n", "\t"], ' ', $val);
         // Nếu trường chứa ký tự phân cách, thay bằng gạch ngang để tránh vỡ số cột

@@ -104,16 +104,17 @@ try {
     $rowIdx = 0;
 
     // Prepared statements kiểm tra Quy cách & UPSERT Chỉ thị
-    $stmtFindSpec  = $pdo->prepare("SELECT product_code, pack_qty, supplier, weight_per_box FROM `product_specs` WHERE `product_code` = ? LIMIT 1");
-    $stmtFindOrder = $pdo->prepare("SELECT id, printed_qty FROM `production_orders` WHERE `slip_code` = ? LIMIT 1");
+    $stmtFindSpec  = $pdo->prepare("SELECT product_code, box_type, pack_qty, supplier, weight_per_box FROM `product_specs` WHERE `product_code` = ? ORDER BY `box_type` ASC LIMIT 1");
+    $stmtFindOrder = $pdo->prepare("SELECT id, printed_qty, box_type FROM `production_orders` WHERE `slip_code` = ? LIMIT 1");
 
     $stmtInsert = $pdo->prepare("INSERT INTO `production_orders` 
-        (`slip_code`, `order_code`, `product_code`, `issue_month`, `target_qty`, `printed_qty`, `remaining_qty`, `pack_qty`, `supplier`, `weight_per_box`, `status`, `note`, `created_by`, `created_at`) 
-        VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())");
+        (`slip_code`, `order_code`, `product_code`, `box_type`, `issue_month`, `target_qty`, `printed_qty`, `remaining_qty`, `pack_qty`, `supplier`, `weight_per_box`, `status`, `note`, `created_by`, `created_at`) 
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())");
 
     $stmtUpdate = $pdo->prepare("UPDATE `production_orders` SET 
         `order_code`     = ?,
         `product_code`   = ?,
+        `box_type`       = ?,
         `issue_month`    = ?,
         `target_qty`     = ?,
         `remaining_qty`  = ?,
@@ -188,6 +189,7 @@ try {
         }
 
         // Đã có quy cách -> Lấy thông số từ danh mục Specs
+        $boxType  = $spec['box_type'] ?? '1';
         $packQty  = (int)$spec['pack_qty'];
         $supplier = $spec['supplier'] ?? '';
         $weight   = (float)$spec['weight_per_box'];
@@ -202,10 +204,12 @@ try {
                 $orderId    = (int)$existingOrder['id'];
                 $printedQty = (int)$existingOrder['printed_qty'];
                 $remainQty  = max(0, $targetQty - $printedQty);
+                $finalBoxType = !empty($existingOrder['box_type']) ? $existingOrder['box_type'] : $boxType;
 
                 $stmtUpdate->execute([
                     $orderCode,
                     $productCode,
+                    $finalBoxType,
                     $issueMonth,
                     $targetQty,
                     $remainQty,
@@ -223,6 +227,7 @@ try {
                     $slipCode,
                     $orderCode,
                     $productCode,
+                    $boxType,
                     $issueMonth,
                     $targetQty,
                     $targetQty, // remaining = target

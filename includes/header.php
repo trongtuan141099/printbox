@@ -3,6 +3,9 @@
  * HEADER HỆ THỐNG - RESPONSIVE NAVBAR VỚI BOOTSTRAP 5
  * Điều hướng tinh gọn: Chỉ Thị SX (CTSX) & Lịch Sử In, cộng với Quản trị hệ thống
  */
+if (ob_get_level() === 0) {
+    ob_start();
+}
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/functions.php';
@@ -24,49 +27,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
     <link rel="stylesheet" href="assets/css/bootstrap.min.css">
     <!-- FACTORY INDUSTRIAL THEME & PRINT STYLES -->
     <link rel="stylesheet" href="assets/css/factory.css">
-    <style>
-        .navbar-brand-badge {
-            background-color: #2563eb;
-            color: #ffffff;
-            font-size: 13px;
-            font-weight: 800;
-            padding: 4px 8px;
-            border-radius: 4px;
-            letter-spacing: 0.5px;
-        }
-        .nav-link-custom {
-            color: #cbd5e1 !important;
-            font-weight: 600;
-            font-size: 14.5px;
-            padding: 8px 14px !important;
-            border-radius: 6px;
-            transition: all 0.15s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .nav-link-custom:hover {
-            color: #ffffff !important;
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-        .nav-link-custom.active {
-            color: #ffffff !important;
-            background-color: #2563eb !important;
-        }
-        .user-pill {
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 8px;
-            padding: 4px 12px;
-            color: #f8fafc;
-            font-size: 13px;
-        }
-        @media print {
-            .navbar, .app-header-bar, .no-print {
-                display: none !important;
-            }
-        }
-    </style>
 </head>
 <body class="d-flex flex-column min-vh-100 bg-light">
 
@@ -76,10 +36,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         <!-- LOGO BRAND -->
         <a class="navbar-brand d-flex align-items-center gap-2" href="orders.php">
             <span class="navbar-brand-badge">DX PLASTIC</span>
-            <!-- <div>
-                <div class="fw-bold fs-6 text-white lh-1">PRINTBOX INTRANET</div>
-                <small class="text-secondary" style="font-size: 11px;">Quản Lý Tem Nhãn Sản Xuất</small>
-            </div> -->
         </a>
 
         <!-- NÚT HAMBURGER MOBILE -->
@@ -105,7 +61,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                     </a>
                 </li>
 
-                <!-- QUẢN TRỊ CẤU HÌNH & QUY CÁCH -->
+                <!-- QUẢN TRỊ CẤU HÌNH & QUY CÁCH (EDITOR & ADMIN) -->
                 <?php if (canManageDirectives() || isAdmin()): ?>
                 <li class="nav-item">
                     <a class="nav-link nav-link-custom <?= ($currentPage === 'specs.php') ? 'active' : '' ?>" href="specs.php">
@@ -114,6 +70,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 </li>
                 <?php endif; ?>
 
+                <!-- CẤU HÌNH QR & NGƯỜI DÙNG (CHỈ ADMIN) -->
                 <?php if (isAdmin()): ?>
                 <li class="nav-item">
                     <a class="nav-link nav-link-custom <?= ($currentPage === 'settings.php') ? 'active' : '' ?>" href="settings.php">
@@ -128,16 +85,16 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <?php endif; ?>
             </ul>
 
-            <!-- THÔNG TIN NGƯỜI DÙNG & ĐĂNG XUẤT -->
+            <!-- THÔNG TIN NGƯỜI DÙNG & NÚT ĐĂNG XUẤT MÀU ĐỎ NỔI BẬT -->
             <div class="d-flex align-items-center gap-2 flex-wrap">
                 <div class="user-pill d-flex align-items-center gap-2">
-                    <!-- <span class="badge <?= ($currentUser['role'] === 'admin') ? 'bg-danger' : (($currentUser['role'] === 'editor') ? 'bg-primary' : 'bg-secondary') ?> text-uppercase">
+                    <span class="role-pill role-<?= htmlspecialchars($currentUser['role']) ?>">
                         <?= htmlspecialchars($currentUser['role']) ?>
-                    </span> -->
+                    </span>
                     <span class="fw-bold"><?= htmlspecialchars($currentUser['full_name']) ?></span>
                     <span class="text-secondary small">(<?= htmlspecialchars($currentUser['employee_code']) ?>)</span>
                 </div>
-                <a href="logout.php" class="btn btn-outline-secondary btn-sm text-light" title="Đăng xuất" onclick="return confirm('Bạn có chắc chắn muốn đăng xuất?')">
+                <a href="logout.php" class="btn btn-danger btn-sm btn-logout fw-bold text-white" title="Đăng xuất khỏi hệ thống" onclick="return confirm('Bạn có chắc chắn muốn đăng xuất?')">
                     🚪 Thoát
                 </a>
             </div>

@@ -60,9 +60,13 @@ if ($type === 'orders') {
     $fromDate   = trim($_GET['from_date'] ?? '');
     $toDate     = trim($_GET['to_date'] ?? '');
 
-    $sql = "SELECT po.*, u.full_name AS creator_name, u.employee_code AS creator_msnv 
+    $sql = "SELECT po.*, u.full_name AS creator_name, u.employee_code AS creator_msnv,
+                   COALESCE(ps.pack_qty, po.pack_qty) AS pack_qty,
+                   COALESCE(ps.supplier, po.supplier) AS supplier,
+                   COALESCE(ps.weight_per_box, po.weight_per_box) AS weight_per_box
             FROM `production_orders` po 
             LEFT JOIN `users` u ON po.created_by = u.id 
+            LEFT JOIN `product_specs` ps ON po.product_code = ps.product_code AND po.box_type = ps.box_type
             WHERE 1=1";
     $params = [];
 
@@ -117,6 +121,7 @@ if ($type === 'orders') {
         'Mã phiếu chỉ thị',
         'Mã chỉ thị (Lot No)',
         'Mã sản phẩm',
+        'Loại thùng',
         'Tháng phát hành',
         'Số lượng chỉ thị',
         'Đã in tích lũy',
@@ -152,6 +157,7 @@ if ($type === 'orders') {
             $o['slip_code'],
             $o['order_code'],
             $o['product_code'],
+            'Thùng loại ' . ($o['box_type'] ?? '1'),
             $o['issue_month'],
             $target,
             $printed,
@@ -185,7 +191,7 @@ if ($type === 'orders') {
         $params = [$kParam, $kParam, $kParam];
     }
 
-    $sql .= " ORDER BY `product_code` ASC";
+    $sql .= " ORDER BY `product_code` ASC, `box_type` ASC";
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $specs = $stmt->fetchAll();
@@ -203,6 +209,7 @@ if ($type === 'orders') {
 
     $headers = [
         'Mã sản phẩm',
+        'Loại thùng',
         'Quy cách (con/thùng)',
         'Nhà cung cấp',
         'Trọng lượng (Kg/thùng)',
@@ -214,6 +221,7 @@ if ($type === 'orders') {
     foreach ($specs as $s) {
         fputcsv($output, [
             $s['product_code'],
+            $s['box_type'] ?? '1',
             $s['pack_qty'],
             $s['supplier'] ?? '',
             $s['weight_per_box'],
@@ -295,6 +303,7 @@ if ($type === 'orders') {
         'Mã phiếu chỉ thị',
         'Mã chỉ thị (Lot No)',
         'Mã sản phẩm',
+        'Loại thùng',
         'Tháng phát hành',
         'Số lượng in (con)',
         'Quy cách (con/thùng)',
@@ -323,6 +332,7 @@ if ($type === 'orders') {
             $r['slip_code'],
             $r['order_code'],
             $r['product_code'],
+            'Thùng loại ' . ($r['box_type'] ?? '1'),
             $r['issue_month'] ?? '',
             $r['print_qty'],
             $r['pack_qty'],

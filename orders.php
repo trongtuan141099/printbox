@@ -29,6 +29,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $slipCode    = trim($_POST['slip_code'] ?? '');
     $orderCode   = trim($_POST['order_code'] ?? '');
     $productCode = trim($_POST['product_code'] ?? '');
+    $boxType     = trim($_POST['box_type'] ?? '1');
+    if (empty($boxType)) $boxType = '1';
     $issueMonth  = trim($_POST['issue_month'] ?? date('m/Y'));
     $targetQty   = (int)($_POST['target_qty'] ?? 0);
     $packQty     = (int)($_POST['pack_qty'] ?? 0);
@@ -43,9 +45,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 
     // Kiểm tra bắt buộc: Sản phẩm phải có Quy Cách đã được khai báo trước trong hệ thống
-    $spec = getProductSpecStrict($productCode, $pdo);
+    $spec = getProductSpecStrict($productCode, $boxType, $pdo);
     if (!$spec) {
-        setFlash('danger', "Chưa thiết lập quy cách cho sản phẩm [{$productCode}]. Vui lòng tạo quy cách trước khi tạo chỉ thị sản xuất!");
+        setFlash('danger', "Chưa thiết lập quy cách cho sản phẩm [{$productCode}] (Thùng loại {$boxType}). Vui lòng tạo quy cách trước khi tạo chỉ thị sản xuất!");
         header("Location: orders.php");
         exit;
     }
@@ -64,12 +66,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     try {
         $stmt = $pdo->prepare("INSERT INTO `production_orders` 
-                (`slip_code`, `order_code`, `product_code`, `issue_month`, `target_qty`, `printed_qty`, `remaining_qty`, `pack_qty`, `supplier`, `weight_per_box`, `status`, `note`, `created_by`, `created_at`) 
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())");
+                (`slip_code`, `order_code`, `product_code`, `box_type`, `issue_month`, `target_qty`, `printed_qty`, `remaining_qty`, `pack_qty`, `supplier`, `weight_per_box`, `status`, `note`, `created_by`, `created_at`) 
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())");
             $stmt->execute([
                 $slipCode,
                 $orderCode,
                 $productCode,
+                $boxType,
                 $issueMonth,
                 $targetQty,
                 $targetQty, // remaining = target lúc tạo mới
@@ -104,6 +107,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $orderId     = (int)($_POST['order_id'] ?? 0);
     $orderCode   = trim($_POST['order_code'] ?? '');
     $productCode = trim($_POST['product_code'] ?? '');
+    $boxType     = trim($_POST['box_type'] ?? '1');
+    if (empty($boxType)) $boxType = '1';
     $issueMonth  = trim($_POST['issue_month'] ?? '');
     $targetQty   = (int)($_POST['target_qty'] ?? 0);
     $packQty     = (int)($_POST['pack_qty'] ?? 1);
@@ -137,6 +142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $stmtUpd = $pdo->prepare("UPDATE `production_orders` SET 
                     `order_code` = ?,
                     `product_code` = ?,
+                    `box_type` = ?,
                     `issue_month` = ?,
                     `target_qty` = ?,
                     `remaining_qty` = ?,
@@ -151,6 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $stmtUpd->execute([
                     $orderCode,
                     $productCode,
+                    $boxType,
                     $issueMonth,
                     $targetQty,
                     $newRemaining,
@@ -205,6 +212,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     } catch (PDOException $e) {
         setFlash('danger', 'Lỗi CSDL: ' . $e->getMessage());
+    }
+
+    header("Location: orders.php");
+    exit;
+}
+
+// =======================================================
+// 3.5. XỬ LÝ XÓA CHỈ THỊ SẢN XUẤT (DELETE ORDER - Editor & Admin)
+// =======================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_order') {
+    if (!canManageDirectives()) {
+        setFlash('danger', 'LỖI PHÂN QUYỀN: Bạn không có quyền xóa chỉ thị sản xuất!');
+        header("Location: orders.php");
+        exit;
+    }
+
+    $orderId = (int)($_POST['order_id'] ?? 0);
+    if ($orderId > 0) {
+        try {
+            $pdo->beginTransaction();
+            $stmtCheck = $pdo->prepare("SELECT `id`, `slip_code`, `order_code` FROM `production_orders` WHERE `id` = ? FOR UPDATE");
+            $stmtCheck->execute([$orderId]);
+            $orderToDelete = $stmtCheck->fetch(PDO::FETCH_ASSOC);
+
+            if ($orderToDelete) {
+                // Xóa chi tiết tem thùng và lịch sử in
+                $pdo->prepare("DELETE FROM `box_labels` WHERE `history_id` IN (SELECT `id` FROM `print_history` WHERE `order_id` = ?)")->execute([$orderId]);
+                $pdo->prepare("DELETE FROM `print_history` WHERE `order_id` = ?")->execute([$orderId]);
+                $pdo->prepare("DELETE FROM `production_orders` WHERE `id` = ?")->execute([$orderId]);
+                $pdo->commit();
+
+                // Ghi audit log
+                $logMsg = date('[Y-m-d H:i:s]') . " [DELETE_ORDER_POST] User: {$currentUser['username']} ({$currentUser['employee_code']}) đã xóa chỉ thị ID: {$orderId}, Phiếu: {$orderToDelete['slip_code']}\n";
+                $logFile = __DIR__ . '/logs/print_audit.log';
+                if (file_exists(dirname($logFile))) {
+                    @file_put_contents($logFile, $logMsg, FILE_APPEND);
+                }
+
+                setFlash('success', "Đã xóa thành công chỉ thị sản xuất [{$orderToDelete['slip_code']}] ({$orderToDelete['order_code']})!");
+            } else {
+                $pdo->rollBack();
+                setFlash('danger', 'Không tìm thấy chỉ thị cần xóa hoặc chỉ thị đã bị xóa trước đó!');
+            }
+        } catch (PDOException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            setFlash('danger', 'Lỗi CSDL khi xóa chỉ thị: ' . $e->getMessage());
+        }
+    } else {
+        setFlash('danger', 'Mã chỉ thị cần xóa không hợp lệ!');
     }
 
     header("Location: orders.php");
@@ -396,20 +454,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // =======================================================
-// BỘ LỌC TÌM KIẾM CHỈ THỊ
+// BỘ LỌC TÌM KIẾM & PHÂN TRANG CHỈ THỊ (PAGINATION)
 // =======================================================
 $searchKeyword = trim($_GET['k'] ?? '');
 $filterStatus  = trim($_GET['status'] ?? '');
 $filterMonth   = trim($_GET['month'] ?? '');
 
-$sql = "SELECT po.*, (CASE WHEN ps.id IS NOT NULL THEN 1 ELSE 0 END) AS has_spec 
-        FROM `production_orders` po 
-        LEFT JOIN `product_specs` ps ON po.`product_code` = ps.`product_code` 
-        WHERE 1=1";
-$params = [];
+$whereSql = " WHERE 1=1";
+$params   = [];
 
 if (!empty($searchKeyword)) {
-    $sql .= " AND (po.`slip_code` LIKE ? OR po.`order_code` LIKE ? OR po.`product_code` LIKE ? OR po.`supplier` LIKE ?)";
+    $whereSql .= " AND (po.`slip_code` LIKE ? OR po.`order_code` LIKE ? OR po.`product_code` LIKE ? OR po.`supplier` LIKE ?)";
     $kParam = "%{$searchKeyword}%";
     $params[] = $kParam;
     $params[] = $kParam;
@@ -418,22 +473,64 @@ if (!empty($searchKeyword)) {
 }
 
 if (!empty($filterStatus)) {
-    $sql .= " AND po.`status` = ?";
+    $whereSql .= " AND po.`status` = ?";
     $params[] = $filterStatus;
 }
 
 if (!empty($filterMonth)) {
-    $sql .= " AND po.`issue_month` LIKE ?";
+    $whereSql .= " AND po.`issue_month` LIKE ?";
     $params[] = "%{$filterMonth}%";
 }
 
-$sql .= " ORDER BY po.`id` DESC";
+// 1. Đếm tổng số bản ghi (Total Records)
+$countSql = "SELECT COUNT(*) FROM `production_orders` po " . $whereSql;
+$stmtCount = $pdo->prepare($countSql);
+$stmtCount->execute($params);
+$totalRecords = (int)$stmtCount->fetchColumn();
+
+// 2. Cấu hình phân trang (Pagination Settings)
+$page  = max(1, (int)($_GET['page'] ?? 1));
+$limit = (int)($_GET['limit'] ?? 15);
+if (!in_array($limit, [10, 15, 25, 50, 100])) {
+    $limit = 15;
+}
+$totalPages = max(1, (int)ceil($totalRecords / $limit));
+if ($page > $totalPages) {
+    $page = $totalPages;
+}
+$offset = ($page - 1) * $limit;
+
+// 3. Truy vấn danh sách chỉ thị theo trang với LIMIT và OFFSET
+$sql = "SELECT po.*, 
+               COALESCE(ps.pack_qty, po.pack_qty) AS pack_qty,
+               COALESCE(ps.supplier, po.supplier) AS supplier,
+               COALESCE(ps.weight_per_box, po.weight_per_box) AS weight_per_box,
+               COALESCE(ps.unit, 'pcs') AS unit,
+               (CASE WHEN ps.id IS NOT NULL THEN 1 ELSE 0 END) AS has_spec 
+        FROM `production_orders` po 
+        LEFT JOIN `product_specs` ps ON po.`product_code` = ps.`product_code` AND po.`box_type` = ps.`box_type` "
+        . $whereSql
+        . " ORDER BY po.`id` DESC LIMIT {$limit} OFFSET {$offset}";
+
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $orders = $stmt->fetchAll();
 
-// Lấy danh mục Specs để phục vụ Auto-complete / Datalist trong form
-$allSpecs = $pdo->query("SELECT product_code, pack_qty, supplier, weight_per_box FROM `product_specs` ORDER BY `product_code` ASC")->fetchAll();
+$fromRecord = ($totalRecords > 0) ? ($offset + 1) : 0;
+$toRecord   = min($offset + $limit, $totalRecords);
+
+// Hàm helper sinh liên kết phân trang duy trì đầy đủ bộ lọc
+function buildOrderPageUrl($pageNumber, $customParams = []) {
+    $queryParams = $_GET;
+    $queryParams['page'] = $pageNumber;
+    foreach ($customParams as $k => $v) {
+        $queryParams[$k] = $v;
+    }
+    return 'orders.php?' . http_build_query($queryParams);
+}
+
+// Lấy danh mục Specs để phục vụ Auto-complete / Datalist và tra cứu đổi loại thùng
+$allSpecs = $pdo->query("SELECT product_code, box_type, pack_qty, supplier, weight_per_box, unit FROM `product_specs` ORDER BY `product_code` ASC, `box_type` ASC")->fetchAll();
 
 // Tham số xuất Excel
 $exportParams = http_build_query([
@@ -444,12 +541,9 @@ $exportParams = http_build_query([
 ]);
 ?>
 
-<div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+<div class="page-header d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
     <div>
         <h1 class="page-title m-0">📋 Quản Lý Chỉ Thị Sản Xuất (CTSX)</h1>
-        <!-- <p class="text-muted small mt-1 mb-0">
-            Quản lý chỉ thị &bull; Tự động map quy cách &bull; Nhập liệu &amp; in tem trực tiếp qua Offcanvas &bull; Quản lý tiến độ
-        </p> -->
     </div>
     <div class="page-actions d-flex flex-wrap gap-2">
         <!-- NÚT MỞ BẢNG IN TEM NHANH (MỌI VAI TRÒ ĐỀU DÙNG ĐƯỢC) -->
@@ -473,8 +567,8 @@ $exportParams = http_build_query([
 </div>
 
 <!-- THANH TÌM KIẾM & BỘ LỌC -->
-<div class="card shadow-sm mb-4">
-    <div class="card-body py-3 px-3">
+<div class="card shadow-sm mb-3">
+    <div class="card-body py-2 px-3">
         <form method="GET" action="orders.php" class="row g-2 align-items-center">
             <div class="col-md-5 col-12">
                 <input type="text" name="k" class="form-control" 
@@ -505,20 +599,20 @@ $exportParams = http_build_query([
 
 <!-- BẢNG DANH SÁCH CHỈ THỊ SẢN XUẤT -->
 <div class="card shadow-sm">
-    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+    <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
         <span class="card-title fw-bold text-dark m-0">
-            Danh Sách Chỉ Thị Sản Xuất <span class="badge bg-secondary ms-1"><?= count($orders) ?> chỉ thị</span>
+            Danh Sách Chỉ Thị Sản Xuất <span class="badge bg-secondary ms-1"><?= number_format($totalRecords) ?> chỉ thị</span>
         </span>
         <span class="text-muted small">Nhấn <strong>"🏷️ In Tem"</strong> trên từng dòng để mở form in trượt tiện lợi</span>
     </div>
     <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0" id="orders_table">
-                <thead class="table-light">
+        <div class="table-responsive table-sticky-container">
+            <table class="table table-hover align-middle mb-0 table-sticky" id="orders_table">
+                <thead class="table-light table-sticky-header">
                     <tr>
                         <th style="width:50px;" class="text-center">STT</th>
-                        <th>Mã Phiếu Chỉ Thị</th>
-                        <th>Mã Chỉ Thị (Lot)</th>
+                        <th style="width:50px;" class="text-center">Mã Phiếu</th>
+                        <th>Mã Chỉ Thị</th>
                         <th>Mã Sản Phẩm</th>
                         <th class="text-center">Tháng PH</th>
                         <th class="text-end">SL Chỉ Thị</th>
@@ -559,7 +653,7 @@ $exportParams = http_build_query([
                             }
                         ?>
                         <tr id="row_order_<?= $row['id'] ?>" class="<?= $isPaused ? 'table-warning' : '' ?>">
-                            <td class="text-center text-muted"><?= $idx + 1 ?></td>
+                            <td class="text-center text-muted"><?= $fromRecord + $idx ?></td>
                             <td>
                                 <strong class="text-primary text-break"><?= htmlspecialchars($row['slip_code']) ?></strong>
                             </td>
@@ -568,9 +662,7 @@ $exportParams = http_build_query([
                             </td>
                             <td>
                                 <div class="fw-bold text-dark"><?= htmlspecialchars($row['product_code']) ?></div>
-                                <?php if (!empty($row['supplier'])): ?>
-                                    <small class="text-muted"><?= htmlspecialchars($row['supplier']) ?></small>
-                                <?php endif; ?>
+
                             </td>
                             <td class="text-center">
                                 <span class="badge bg-light text-dark border"><?= htmlspecialchars($row['issue_month'] ?: '-') ?></span>
@@ -586,17 +678,13 @@ $exportParams = http_build_query([
                             </td>
                             <td class="text-center">
                                 <span class="badge bg-light text-dark border"><?= (int)$row['pack_qty'] ?> con/thùng</span>
-                                <?php if (!empty($row['has_spec'])): ?>
-                                    <span class="badge bg-success-subtle text-success border border-success-subtle d-block mt-1" style="font-size:10px;">✓ Đã có quy cách</span>
-                                <?php else: ?>
-                                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle d-block mt-1" style="font-size:10px;">⚠️ Chưa có quy cách</span>
-                                <?php endif; ?>
+
                             </td>
                             <td>
                                 <div class="d-flex align-items-center gap-1">
                                     <div class="progress flex-grow-1" style="height: 7px;">
-                                        <div class="progress-bar <?= ($pct >= 100) ? 'bg-success' : ($isPaused ? 'bg-warning' : 'bg-primary') ?> cell-progressbar" 
-                                             role="progressbar" style="width: <?= $pct ?>%;" aria-valuenow="<?= $pct ?>" aria-valuemin="0" aria-valuemax="100"></div>
+                                         <div class="progress-bar <?= ($pct >= 100) ? 'bg-success' : ($isPaused ? 'bg-warning' : 'bg-primary') ?> cell-progressbar" 
+                                              role="progressbar" style="width: <?= $pct ?>%;" aria-valuenow="<?= $pct ?>" aria-valuemin="0" aria-valuemax="100"></div>
                                     </div>
                                     <small class="fw-bold text-muted cell-pct" style="font-size:11px;min-width:32px;text-align:right;"><?= $pct ?>%</small>
                                 </div>
@@ -611,10 +699,10 @@ $exportParams = http_build_query([
                                             class="btn btn-sm <?= $isPaused ? 'btn-secondary' : 'btn-primary' ?> btn-action-print" 
                                             onclick="openOffcanvasPrintById(<?= (int)$row['id'] ?>)"
                                             title="<?= $isPaused ? 'Chỉ thị đang tạm dừng in' : 'Nhập liệu in tem thùng' ?>">
-                                        🏷️ In Tem
+                                        🏷️ In
                                     </button>
 
-                                    <!-- NÚT 2 & 3: CHỈNH SỬA & TẠM DỪNG (EDITOR & ADMIN) -->
+                                    <!-- NÚT 2, 3 & 4: CHỈNH SỬA, TẠM DỪNG & XÓA (CHỈ DÀNH CHO EDITOR & ADMIN) -->
                                     <?php if (canManageDirectives()): ?>
                                         <button type="button" class="btn btn-sm btn-outline-secondary" 
                                                 onclick="openEditModalById(<?= (int)$row['id'] ?>)" 
@@ -635,6 +723,13 @@ $exportParams = http_build_query([
                                                 ⏸️ Dừng
                                             </button>
                                         <?php endif; ?>
+
+                                        <!-- NÚT 4: XÓA CHỈ THỊ SẢN XUẤT (EDITOR & ADMIN) -->
+                                        <button type="button" class="btn btn-sm btn-outline-danger" 
+                                                onclick="requestDeleteOrder(<?= (int)$row['id'] ?>, '<?= htmlspecialchars(addslashes($row['slip_code']), ENT_QUOTES, 'UTF-8') ?>', '<?= htmlspecialchars(addslashes($row['order_code']), ENT_QUOTES, 'UTF-8') ?>')" 
+                                                title="Xóa chỉ thị sản xuất này">
+                                            🗑️
+                                        </button>
                                     <?php endif; ?>
                                 </div>
                             </td>
@@ -644,6 +739,76 @@ $exportParams = http_build_query([
                 </tbody>
             </table>
         </div>
+    </div>
+
+    <!-- THANH ĐIỀU HƯỚNG PHÂN TRANG (PAGINATION) -->
+    <div class="card-footer bg-white py-3 border-top d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div class="d-flex align-items-center gap-2 small text-muted flex-wrap">
+            <span>
+                Hiển thị <strong><?= $fromRecord ?></strong> - <strong><?= $toRecord ?></strong> trên tổng số <strong><?= number_format($totalRecords) ?></strong> chỉ thị
+                (Trang <strong><?= $page ?></strong> / <strong><?= $totalPages ?></strong>)
+            </span>
+            <span class="mx-1 d-none d-sm-inline">|</span>
+            <label class="d-inline-flex align-items-center gap-1 mb-0">
+                Hiển thị:
+                <select class="form-select form-select-sm d-inline-block w-auto" onchange="changePageLimit(this.value)">
+                    <?php foreach ([10, 15, 25, 50, 100] as $limOpt): ?>
+                        <option value="<?= $limOpt ?>" <?= ($limit === $limOpt) ? 'selected' : '' ?>><?= $limOpt ?></option>
+                    <?php endforeach; ?>
+                </select>
+                dòng/trang
+            </label>
+        </div>
+
+        <?php if ($totalPages > 1): ?>
+        <nav aria-label="Phân trang chỉ thị">
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item <?= ($page <= 1) ? 'disabled' : '' ?>">
+                    <a class="page-link" href="<?= buildOrderPageUrl(1) ?>" title="Trang đầu">&laquo;</a>
+                </li>
+                <li class="page-item <?= ($page <= 1) ? 'disabled' : '' ?>">
+                    <a class="page-link" href="<?= buildOrderPageUrl($page - 1) ?>" title="Trang trước">&lsaquo;</a>
+                </li>
+
+                <?php
+                $startP = max(1, $page - 2);
+                $endP   = min($totalPages, $page + 2);
+                if ($endP - $startP < 4) {
+                    if ($startP === 1) {
+                        $endP = min($totalPages, $startP + 4);
+                    } elseif ($endP === $totalPages) {
+                        $startP = max(1, $endP - 4);
+                    }
+                }
+                if ($startP > 1): ?>
+                    <li class="page-item"><a class="page-link" href="<?= buildOrderPageUrl(1) ?>">1</a></li>
+                    <?php if ($startP > 2): ?>
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    <?php endif; ?>
+                <?php endif; ?>
+
+                <?php for ($p = $startP; $p <= $endP; $p++): ?>
+                    <li class="page-item <?= ($p === $page) ? 'active' : '' ?>">
+                        <a class="page-link" href="<?= buildOrderPageUrl($p) ?>"><?= $p ?></a>
+                    </li>
+                <?php endfor; ?>
+
+                <?php if ($endP < $totalPages): ?>
+                    <?php if ($endP < $totalPages - 1): ?>
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    <?php endif; ?>
+                    <li class="page-item"><a class="page-link" href="<?= buildOrderPageUrl($totalPages) ?>"><?= $totalPages ?></a></li>
+                <?php endif; ?>
+
+                <li class="page-item <?= ($page >= $totalPages) ? 'disabled' : '' ?>">
+                    <a class="page-link" href="<?= buildOrderPageUrl($page + 1) ?>" title="Trang sau">&rsaquo;</a>
+                </li>
+                <li class="page-item <?= ($page >= $totalPages) ? 'disabled' : '' ?>">
+                    <a class="page-link" href="<?= buildOrderPageUrl($totalPages) ?>" title="Trang cuối">&raquo;</a>
+                </li>
+            </ul>
+        </nav>
+        <?php endif; ?>
     </div>
 </div>
 
@@ -685,7 +850,8 @@ $exportParams = http_build_query([
                 <div class="col-6"><strong>Mã sản phẩm:</strong> <span id="oc_disp_product" class="fw-bold">-</span></div>
                 <div class="col-6"><strong>Tháng phát hành:</strong> <span id="oc_disp_month" class="badge bg-secondary">-</span></div>
                 <div class="col-6"><strong>Quy cách:</strong> <span id="oc_disp_pack" class="text-warning fw-bold">-</span> con/thùng</div>
-                <div class="col-6"><strong>Nhà cung cấp:</strong> <span id="oc_disp_supp">-</span></div>
+                <div class="col-6"><strong>Loại thùng:</strong> <span id="oc_disp_box_type" class="badge bg-primary">Thùng loại 1</span></div>
+                <div class="col-12"><strong>Nhà cung cấp:</strong> <span id="oc_disp_supp">-</span></div>
             </div>
 
             <!-- KPI THỐNG KÊ SỐ LƯỢNG -->
@@ -719,6 +885,16 @@ $exportParams = http_build_query([
 
         <!-- FORM NHẬP SỐ LƯỢNG IN -->
         <div id="offcanvas_print_inputs" style="display:none;">
+            <!-- LỰA CHỌN LOẠI THÙNG KHI IN -->
+            <div class="mb-3">
+                <label class="form-label fw-bold required text-primary">📦 Chọn Loại Thùng Khi In:</label>
+                <select id="offcanvas_box_type" class="form-select form-select-lg fw-bold border-primary shadow-sm">
+                    <option value="1/2">Thùng loại 1/2</option>
+                    <option value="1/4">Thùng loại 1/4</option>
+                </select>
+                <small class="text-muted">Hệ thống sẽ tự động tra cứu lại quy cách đóng gói (pack_qty) theo loại thùng đã chọn để tính số thùng chẵn/lẻ chính xác.</small>
+            </div>
+
             <div class="mb-3">
                 <label class="form-label fw-bold required">Số Lượng Tem Sản Phẩm Đã In Lượt Này (con / pcs)</label>
                 <input type="number" id="offcanvas_print_qty" class="form-control form-control-lg fw-bold" 
@@ -728,6 +904,10 @@ $exportParams = http_build_query([
 
             <!-- BẢNG TÍNH TOÁN TEM THÙNG REALTIME -->
             <div id="offcanvas_calc_panel" class="card border-primary bg-light p-3 mb-3" style="display:none;">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span class="text-muted small">Loại thùng áp dụng:</span>
+                    <strong id="oc_calc_box_type_label" class="text-primary">Thùng loại 1</strong>
+                </div>
                 <div class="d-flex justify-content-between align-items-center mb-1">
                     <span class="text-muted small">Quy cách đóng gói:</span>
                     <strong id="oc_calc_pack">0 con/thùng</strong>
@@ -825,6 +1005,10 @@ $exportParams = http_build_query([
                 <tr>
                     <td class="fw-bold bg-light">Mã sản phẩm:</td>
                     <td id="cf_product_code" class="fw-bold">-</td>
+                </tr>
+                <tr>
+                    <td class="fw-bold bg-light">Phân loại thùng:</td>
+                    <td id="cf_box_type" class="fw-bold text-dark">-</td>
                 </tr>
                 <tr>
                     <td class="fw-bold bg-light">Số lượng tem SP:</td>
@@ -960,7 +1144,7 @@ $exportParams = http_build_query([
 <?php if (canManageDirectives()): ?>
 <div id="modal_edit_order" class="modal-overlay">
     <div class="modal-dialog">
-        <form method="POST" action="orders.php" id="form_edit_order" onsubmit="return confirmEditSubmit();">
+        <form method="POST" action="orders.php" id="form_edit_order">
             <input type="hidden" name="action" value="edit_order">
             <input type="hidden" name="order_id" id="edit_order_id">
             
@@ -982,6 +1166,13 @@ $exportParams = http_build_query([
                     <div class="col-md-6">
                         <label class="form-label required">Mã Sản Phẩm</label>
                         <input type="text" name="product_code" id="edit_product_code" class="form-control" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label required">Phân Loại Thùng</label>
+                        <select name="box_type" id="edit_box_type" class="form-select" required>
+                            <option value="1/2">Thùng loại 1/2</option>
+                            <option value="1/4">Thùng loại 1/4</option>
+                        </select>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Tháng Phát Hành</label>
@@ -1051,29 +1242,37 @@ $exportParams = http_build_query([
                         <datalist id="product_specs_datalist">
                             <?php foreach ($allSpecs as $sp): ?>
                                 <option value="<?= htmlspecialchars($sp['product_code']) ?>">
-                                    <?= htmlspecialchars($sp['product_code']) ?> (Quy cách: <?= $sp['pack_qty'] ?> con/thùng)
+                                    <?= htmlspecialchars($sp['product_code']) ?> (Thùng loại <?= $sp['box_type'] ?? '1/2' ?>: <?= $sp['pack_qty'] ?> con/thùng)
                                 </option>
                             <?php endforeach; ?>
                         </datalist>
                         <small class="text-muted">Tự động điền Quy cách khi chọn mã từ danh mục Specs.</small>
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label">Tháng Phát Hành</label>
-                        <input type="text" name="issue_month" class="form-control" value="<?= date('m/Y') ?>" placeholder="vd: 10/2026">
+                        <label class="form-label required">Phân Loại Thùng</label>
+                        <select name="box_type" id="add_box_type" class="form-select" required>
+                            <option value="1/2">Thùng loại 1/2</option>
+                            <option value="1/4">Thùng loại 1/4</option>
+                        </select>
+                        <small class="text-muted">Hệ thống tự động tra quy cách theo Loại thùng.</small>
                     </div>
 
                     <div class="col-md-6">
+                        <label class="form-label">Tháng Phát Hành</label>
+                        <input type="text" name="issue_month" class="form-control" value="<?= date('m/Y') ?>" placeholder="vd: 10/2026">
+                    </div>
+                    <div class="col-md-6">
                         <label class="form-label required">Số Lượng Chỉ Thị (Target)</label>
-                        <input type="number" name="target_qty" class="form-control" placeholder="100" min="1" required>
+                        <input type="number" name="target_qty" class="form-control"  min="1" required>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label required">Quy Cách (con/thùng)</label>
-                        <input type="number" name="pack_qty" id="add_pack_qty" class="form-control" placeholder="10" min="1" required>
+                        <input type="number" name="pack_qty" id="add_pack_qty" class="form-control"  min="1" required>
                     </div>
 
                     <div class="col-md-6">
                         <label class="form-label">Nhà Cung Cấp</label>
-                        <input type="text" name="supplier" id="add_supplier" class="form-control" placeholder="Tên đối tác / xưởng">
+                        <input type="text" name="supplier" id="add_supplier" class="form-control" >
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Trọng Lượng (Kg/thùng)</label>
@@ -1082,7 +1281,7 @@ $exportParams = http_build_query([
 
                     <div class="col-12">
                         <label class="form-label">Ghi Chú</label>
-                        <input type="text" name="note" class="form-control" placeholder="Ghi chú đơn hàng...">
+                        <input type="text" name="note" class="form-control" placeholder="Ghi chú...">
                     </div>
                 </div>
             </div>
@@ -1166,12 +1365,78 @@ $exportParams = http_build_query([
     </div>
 </div>
 
+<!-- =======================================================
+     MODAL 8: XÁC NHẬN XÓA CHỈ THỊ SẢN XUẤT (EDITOR & ADMIN)
+     ======================================================= -->
+<?php if (canManageDirectives()): ?>
+<div id="modal_confirm_delete_order" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 480px;">
+        <form method="POST" action="orders.php" id="form_delete_order">
+            <input type="hidden" name="action" value="delete_order">
+            <input type="hidden" name="order_id" id="delete_order_id">
+            
+            <div class="modal-header bg-danger text-white">
+                <span class="modal-title fw-bold">🗑️ Xác Nhận Xóa Chỉ Thị Sản Xuất</span>
+                <button type="button" class="modal-close text-white" onclick="closeModal('modal_confirm_delete_order')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger mb-3 py-2 px-3">
+                    <strong>⚠️ CẢNH BÁO NGUY HIỂM:</strong><br>
+                    Bạn có chắc chắn muốn <strong>XÓA VĨNH VIỄN</strong> chỉ thị sau khỏi cơ sở dữ liệu?
+                </div>
+
+                <table class="table table-bordered small mb-3">
+                    <tr>
+                        <td class="bg-light fw-bold" style="width: 42%;">Mã phiếu chỉ thị:</td>
+                        <td id="del_disp_slip" class="fw-bold text-primary">-</td>
+                    </tr>
+                    <tr>
+                        <td class="bg-light fw-bold">Mã chỉ thị (Lot No):</td>
+                        <td id="del_disp_order" class="fw-bold text-dark">-</td>
+                    </tr>
+                </table>
+
+                <div class="text-muted small">
+                    * Lưu ý: Thao tác này sẽ xóa toàn bộ lịch sử in và tem thùng liên quan đến chỉ thị này. Thao tác không thể khôi phục!
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('modal_confirm_delete_order')">Hủy Bỏ</button>
+                <button type="submit" id="btn_confirm_delete_submit" class="btn btn-danger fw-bold">
+                    🗑️ Xác Nhận Xóa Vĩnh Viễn
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
+
 <script>
 // =======================================================
 // DỮ LIỆU ĐỒNG BỘ TOÀN CỤC & BIẾN TRẠNG THÁI
 // =======================================================
 const ordersDataMap = <?= json_encode(array_column($orders, null, 'id'), JSON_UNESCAPED_UNICODE) ?: '{}' ?>;
-const allSpecsMap   = <?= json_encode(array_column($allSpecs, null, 'product_code'), JSON_UNESCAPED_UNICODE) ?: '{}' ?>;
+const allSpecsList  = <?= json_encode($allSpecs, JSON_UNESCAPED_UNICODE) ?: '[]' ?>;
+const allSpecsMapByKey = {};
+const specsByProduct   = {};
+
+allSpecsList.forEach(item => {
+    const boxType = item.box_type || '1';
+    const key = item.product_code + '___' + boxType;
+    allSpecsMapByKey[key] = item;
+    if (!specsByProduct[item.product_code]) {
+        specsByProduct[item.product_code] = [];
+    }
+    specsByProduct[item.product_code].push(item);
+});
+
+// Tương thích ngược allSpecsMap[product_code]
+const allSpecsMap = {};
+allSpecsList.forEach(item => {
+    if (!allSpecsMap[item.product_code] || item.box_type === '1') {
+        allSpecsMap[item.product_code] = item;
+    }
+});
 
 let currentOrder        = null;
 let currentCalculation  = null;
@@ -1332,27 +1597,94 @@ function resetOffcanvasState() {
     document.getElementById('offcanvas_print_qty').value = '';
 }
 
+// Gắn sự kiện thay đổi loại thùng cập nhật quy cách và tính toán lại realtime
+function onOffcanvasBoxTypeChange() {
+    if (!currentOrder) return;
+    const selectedBoxType = document.getElementById('offcanvas_box_type')?.value || '1/2';
+    currentOrder.box_type = selectedBoxType;
+    const key = currentOrder.product_code + '___' + selectedBoxType;
+    const spec = allSpecsMapByKey[key] || allSpecsMap[currentOrder.product_code];
+    if (spec) {
+        currentOrder.pack_qty = parseInt(spec.pack_qty, 10) || 1;
+        if (spec.weight_per_box) {
+            currentOrder.weight_per_box = parseFloat(spec.weight_per_box);
+        }
+        if (spec.supplier) {
+            currentOrder.supplier = spec.supplier;
+            const suppEl = document.getElementById('oc_disp_supp');
+            if (suppEl) suppEl.innerText = spec.supplier;
+        }
+    }
+    const dispPackEl = document.getElementById('oc_disp_pack');
+    if (dispPackEl) dispPackEl.innerText = currentOrder.pack_qty;
+    const dispBox = document.getElementById('oc_disp_box_type');
+    if (dispBox) dispBox.innerText = 'Thùng loại ' + selectedBoxType;
+    const calcBox = document.getElementById('oc_calc_box_type_label');
+    if (calcBox) calcBox.innerText = 'Thùng loại ' + selectedBoxType;
+    recalculateOffcanvas();
+}
+window.onOffcanvasBoxTypeChange = onOffcanvasBoxTypeChange;
+
 function loadOrderIntoOffcanvas(order) {
-    currentOrder = order;
+    currentOrder = Object.assign({}, order);
     currentCalculation = null;
     verifiedAdminMsnv = null;
     verifiedAdminPass = null;
 
-    document.getElementById('oc_disp_slip').innerText = order.slip_code;
-    document.getElementById('oc_disp_order').innerText = order.order_code;
-    document.getElementById('oc_disp_product').innerText = order.product_code;
-    document.getElementById('oc_disp_month').innerText = order.issue_month || 'N/A';
-    document.getElementById('oc_disp_pack').innerText = order.pack_qty;
-    document.getElementById('oc_disp_supp').innerText = order.supplier || '(Trống)';
+    document.getElementById('oc_disp_slip').innerText = currentOrder.slip_code;
+    document.getElementById('oc_disp_order').innerText = currentOrder.order_code;
+    document.getElementById('oc_disp_product').innerText = currentOrder.product_code;
+    document.getElementById('oc_disp_month').innerText = currentOrder.issue_month || 'N/A';
+    document.getElementById('oc_disp_pack').innerText = currentOrder.pack_qty;
+    document.getElementById('oc_disp_supp').innerText = currentOrder.supplier || '(Trống)';
 
-    document.getElementById('oc_disp_target').innerText = Number(order.target_qty).toLocaleString();
-    document.getElementById('oc_disp_printed').innerText = Number(order.printed_qty).toLocaleString();
-    document.getElementById('oc_disp_remaining').innerText = Number(order.remaining_qty).toLocaleString();
+    const curBoxType = currentOrder.box_type || '1';
+    const dispBoxTypeEl = document.getElementById('oc_disp_box_type');
+    if (dispBoxTypeEl) dispBoxTypeEl.innerText = 'Thùng loại ' + curBoxType;
+    const calcBoxTypeEl = document.getElementById('oc_calc_box_type_label');
+    if (calcBoxTypeEl) calcBoxTypeEl.innerText = 'Thùng loại ' + curBoxType;
+
+    // Nạp danh sách tùy chọn loại thùng động theo sản phẩm
+    const boxTypeSelect = document.getElementById('offcanvas_box_type');
+    if (boxTypeSelect) {
+        boxTypeSelect.innerHTML = '';
+        const prodSpecs = specsByProduct[currentOrder.product_code] || [];
+        if (prodSpecs.length > 0) {
+            prodSpecs.forEach(sp => {
+                const opt = document.createElement('option');
+                opt.value = sp.box_type || '1/2';
+                opt.textContent = `Thùng loại ${sp.box_type || '1/2'} (${sp.pack_qty} con/thùng)`;
+                boxTypeSelect.appendChild(opt);
+            });
+            const hasCurrent = prodSpecs.some(sp => (sp.box_type || '1/2') === curBoxType);
+            if (!hasCurrent) {
+                const opt = document.createElement('option');
+                opt.value = curBoxType;
+                opt.textContent = `Thùng loại ${curBoxType}`;
+                boxTypeSelect.appendChild(opt);
+            }
+        } else {
+            boxTypeSelect.innerHTML = `
+                <option value="1/2">Thùng loại 1/2</option>
+                <option value="1/4">Thùng loại 1/4</option>
+            `;
+        }
+        boxTypeSelect.value = curBoxType;
+    }
+
+    const selBoxType = document.getElementById('offcanvas_box_type');
+    if (selBoxType) {
+        selBoxType.onchange = onOffcanvasBoxTypeChange;
+    }
+
+    document.getElementById('oc_disp_target').innerText = Number(currentOrder.target_qty).toLocaleString();
+    document.getElementById('oc_disp_printed').innerText = Number(currentOrder.printed_qty).toLocaleString();
+    document.getElementById('oc_disp_remaining').innerText = Number(currentOrder.remaining_qty).toLocaleString();
 
     // Checkbox in thùng lẻ luôn luôn UNCHECKED by default
     document.getElementById('oc_chk_odd_box').checked = false;
 
-    const isPaused = (order.status === 'paused');
+    const isPaused = (currentOrder.status === 'paused');
     const statusBadge = document.getElementById('offcanvas_badge_status');
     const pausedAlert = document.getElementById('offcanvas_alert_paused');
     const printInputs = document.getElementById('offcanvas_print_inputs');
@@ -1370,10 +1702,10 @@ function loadOrderIntoOffcanvas(order) {
         printQtyInput.disabled = false;
         submitBtn.disabled = false;
 
-        if (order.status === 'completed') {
+        if (currentOrder.status === 'completed') {
             statusBadge.className = 'badge bg-success';
             statusBadge.innerText = 'HOÀN THÀNH';
-        } else if (order.status === 'in_progress') {
+        } else if (currentOrder.status === 'in_progress') {
             statusBadge.className = 'badge bg-primary';
             statusBadge.innerText = 'ĐANG IN';
         } else {
@@ -1551,6 +1883,9 @@ if (btnOffSubmit) {
         document.getElementById('cf_slip_code').innerText = currentOrder.slip_code;
         document.getElementById('cf_order_code').innerText = currentOrder.order_code;
         document.getElementById('cf_product_code').innerText = currentOrder.product_code;
+        const curBoxType = document.getElementById('offcanvas_box_type')?.value || currentOrder.box_type || '1/2';
+        const cfBoxEl = document.getElementById('cf_box_type');
+        if (cfBoxEl) cfBoxEl.innerText = 'Thùng loại ' + curBoxType;
         document.getElementById('cf_print_qty').innerText = printQty.toLocaleString() + ' con';
         document.getElementById('cf_pack_qty').innerText = currentOrder.pack_qty + ' con/thùng';
         document.getElementById('cf_box_count').innerText = currentCalculation.totalBoxes + ' TEM';
@@ -1625,6 +1960,7 @@ function submitAdminApproval() {
     formData.append('order_id', currentOrder.id);
     formData.append('print_qty', currentCalculation.printQty);
     formData.append('is_odd_box', (currentCalculation.hasOdd && document.getElementById('oc_chk_odd_box').checked) ? 1 : 0);
+    formData.append('box_type', document.getElementById('offcanvas_box_type')?.value || currentOrder.box_type || '1/2');
     formData.append('msnv', msnv);
     formData.append('password', pass);
     formData.append('printer_name', selectedPrinter);
@@ -1733,6 +2069,7 @@ if (btnConfirmExecute) {
         formData.append('order_id', currentOrder.id);
         formData.append('print_qty', currentCalculation.printQty);
         formData.append('is_odd_box', (currentCalculation.hasOdd && document.getElementById('oc_chk_odd_box').checked) ? 1 : 0);
+        formData.append('box_type', document.getElementById('offcanvas_box_type')?.value || currentOrder.box_type || '1/2');
         formData.append('admin_msnv', verifiedAdminMsnv || '');
         formData.append('admin_pass', verifiedAdminPass || '');
         formData.append('printer_name', selectedPrinter);
@@ -1983,6 +2320,8 @@ function openEditModal(order) {
     document.getElementById('edit_slip_code').value = order.slip_code;
     document.getElementById('edit_order_code').value = order.order_code;
     document.getElementById('edit_product_code').value = order.product_code;
+    const editBoxTypeEl = document.getElementById('edit_box_type');
+    if (editBoxTypeEl) editBoxTypeEl.value = order.box_type || '1';
     document.getElementById('edit_issue_month').value = order.issue_month || '';
     document.getElementById('edit_target_qty').value = order.target_qty;
     document.getElementById('edit_pack_qty').value = order.pack_qty;
@@ -2037,43 +2376,86 @@ function requestResume(orderId, slipCode) {
     openModal('modal_confirm_toggle');
 }
 
-// AUTO MAP SPECS KHI NHẬP PRODUCT_CODE TRONG FORM THÊM MỚI
+// AUTO MAP SPECS KHI SỬA CHỈ THỊ (EDIT ORDER)
+function autoSyncEditSpecs() {
+    const code = document.getElementById('edit_product_code')?.value.trim();
+    const box = document.getElementById('edit_box_type')?.value || '1';
+    if (!code) return;
+    const spec = allSpecsMapByKey[code + '___' + box] || allSpecsMap[code];
+    if (spec) {
+        if (spec.pack_qty) document.getElementById('edit_pack_qty').value = spec.pack_qty;
+        if (spec.supplier) document.getElementById('edit_supplier').value = spec.supplier;
+        if (spec.weight_per_box) document.getElementById('edit_weight').value = spec.weight_per_box;
+    }
+}
+const editBoxTypeSelect = document.getElementById('edit_box_type');
+if (editBoxTypeSelect) editBoxTypeSelect.addEventListener('change', autoSyncEditSpecs);
+const editProdCodeInput = document.getElementById('edit_product_code');
+if (editProdCodeInput) editProdCodeInput.addEventListener('change', autoSyncEditSpecs);
+
+// AUTO MAP SPECS KHI NHẬP PRODUCT_CODE HOẶC CHỌN BOX_TYPE TRONG FORM THÊM MỚI (ADD ORDER)
+function autoSyncAddSpecs() {
+    const code = document.getElementById('add_product_code')?.value.trim();
+    const box = document.getElementById('add_box_type')?.value || '1';
+    if (!code) return;
+    const spec = allSpecsMapByKey[code + '___' + box] || allSpecsMap[code];
+    if (spec) {
+        const pQty = document.getElementById('add_pack_qty');
+        const supp = document.getElementById('add_supplier');
+        const wgt  = document.getElementById('add_weight');
+        if (pQty) pQty.value = spec.pack_qty || 1;
+        if (supp) supp.value = spec.supplier || '';
+        if (wgt)  wgt.value  = spec.weight_per_box > 0 ? spec.weight_per_box : '';
+    }
+}
 const addProdInput = document.getElementById('add_product_code');
-if (addProdInput) {
-    addProdInput.addEventListener('change', function() {
-        const val = this.value.trim();
-        if (allSpecsMap && allSpecsMap[val]) {
-            const spec = allSpecsMap[val];
-            const pQty = document.getElementById('add_pack_qty');
-            const supp = document.getElementById('add_supplier');
-            const wgt  = document.getElementById('add_weight');
-            if (pQty) pQty.value = spec.pack_qty || 1;
-            if (supp) supp.value = spec.supplier || '';
-            if (wgt)  wgt.value  = spec.weight_per_box > 0 ? spec.weight_per_box : '';
-        }
-    });
+if (addProdInput) addProdInput.addEventListener('change', autoSyncAddSpecs);
+const addBoxInput = document.getElementById('add_box_type');
+if (addBoxInput) addBoxInput.addEventListener('change', autoSyncAddSpecs);
+
+// =======================================================
+// CÁC HÀM TIỆN ÍCH QUẢN TRỊ & PHÂN TRANG
+// =======================================================
+function requestDeleteOrder(orderId, slipCode, orderCode) {
+    const inpId = document.getElementById('delete_order_id');
+    if (inpId) inpId.value = orderId;
+    const slipEl = document.getElementById('del_disp_slip');
+    if (slipEl) slipEl.innerText = slipCode;
+    const orderEl = document.getElementById('del_disp_order');
+    if (orderEl) orderEl.innerText = orderCode;
+    openModal('modal_confirm_delete_order');
+}
+
+function changePageLimit(newLimit) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('limit', newLimit);
+    url.searchParams.set('page', 1);
+    window.location.href = url.toString();
 }
 
 // =======================================================
-// GẮN TẤT CẢ CÁC HÀM XỬ LÝ LÊN WINDOW TOÀN CỤC
+// GẮN TẤT CẢ CÁC HÀM XỬ LÝ LÊN WINDOW TOÀN CỤC (GLOBAL EXPORTS)
 // =======================================================
 window.openModal              = openModal;
 window.closeModal             = closeModal;
 window.openOffcanvasPrint     = openOffcanvasPrint;
 window.openOffcanvasPrintById = openOffcanvasPrintById;
 window.openEditModalById      = openEditModalById;
+window.openEditModal          = openEditModal;
+window.confirmEditSubmit      = confirmEditSubmit;
 window.resetOffcanvasState    = resetOffcanvasState;
 window.loadOrderIntoOffcanvas = loadOrderIntoOffcanvas;
+window.onOffcanvasBoxTypeChange = onOffcanvasBoxTypeChange;
 window.searchOrderOffcanvas   = searchOrderOffcanvas;
 window.recalculateOffcanvas   = recalculateOffcanvas;
 window.updateTableRowAfterPrint = updateTableRowAfterPrint;
 window.renderPrintedLabels    = renderPrintedLabels;
 window.triggerDirectPrint     = triggerDirectPrint;
-window.openEditModal          = openEditModal;
-window.confirmEditSubmit      = confirmEditSubmit;
 window.requestPause           = requestPause;
 window.requestResume          = requestResume;
 window.submitAdminApproval    = submitAdminApproval;
+window.requestDeleteOrder     = requestDeleteOrder;
+window.changePageLimit        = changePageLimit;
 
 // =======================================================
 // AJAX SUBMISSIONS DÀNH CHO CÁC MODAL THAO TÁC CHỈ THỊ (CRUD & STATUS)
@@ -2262,6 +2644,46 @@ if (formImportOrders) {
             } else {
                 alert('Lỗi kết nối: ' + err.message);
             }
+        });
+    });
+}
+
+// 5. AJAX XÓA CHỈ THỊ SẢN XUẤT (DELETE ORDER)
+const formDeleteOrder = document.getElementById('form_delete_order');
+if (formDeleteOrder) {
+    formDeleteOrder.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const submitBtn = document.getElementById('btn_confirm_delete_submit');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Đang xóa...';
+        }
+
+        const formData = new FormData(this);
+        fetch('ajax/delete_order.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerText = '🗑️ Xác Nhận Xóa Vĩnh Viễn';
+            }
+            if (data.success) {
+                closeModal('modal_confirm_delete_order');
+                alert(data.message);
+                location.reload();
+            } else {
+                alert('Lỗi xóa chỉ thị: ' + data.message);
+            }
+        })
+        .catch(err => {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerText = '🗑️ Xác Nhận Xóa Vĩnh Viễn';
+            }
+            alert('Lỗi kết nối: ' + err.message);
         });
     });
 }

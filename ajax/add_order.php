@@ -27,6 +27,8 @@ $currentUser = getCurrentUser();
 $slipCode    = trim($_POST['slip_code'] ?? '');
 $orderCode   = trim($_POST['order_code'] ?? '');
 $productCode = trim($_POST['product_code'] ?? '');
+$boxType     = trim($_POST['box_type'] ?? '1');
+if (empty($boxType)) $boxType = '1';
 $issueMonth  = trim($_POST['issue_month'] ?? date('m/Y'));
 $targetQty   = (int)($_POST['target_qty'] ?? 0);
 $packQty     = (int)($_POST['pack_qty'] ?? 0);
@@ -45,11 +47,11 @@ if (empty($slipCode) || empty($orderCode) || empty($productCode) || $targetQty <
 $pdo = getDbConnection();
 
 // Kiểm tra bắt buộc: Sản phẩm phải có Quy Cách đã được khai báo trước trong hệ thống
-$spec = getProductSpecStrict($productCode, $pdo);
+$spec = getProductSpecStrict($productCode, $boxType, $pdo);
 if (!$spec) {
     echo json_encode([
         'success' => false,
-        'message' => "Chưa thiết lập quy cách cho sản phẩm [{$productCode}]. Vui lòng tạo quy cách trước khi tạo chỉ thị sản xuất!"
+        'message' => "Chưa thiết lập quy cách cho sản phẩm [{$productCode}] (Thùng loại {$boxType}). Vui lòng tạo quy cách trước khi tạo chỉ thị sản xuất!"
     ]);
     exit;
 }
@@ -81,13 +83,14 @@ try {
     }
 
     $stmt = $pdo->prepare("INSERT INTO `production_orders` 
-        (`slip_code`, `order_code`, `product_code`, `issue_month`, `target_qty`, `printed_qty`, `remaining_qty`, `pack_qty`, `supplier`, `weight_per_box`, `status`, `note`, `created_by`, `created_at`) 
-        VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())");
+        (`slip_code`, `order_code`, `product_code`, `box_type`, `issue_month`, `target_qty`, `printed_qty`, `remaining_qty`, `pack_qty`, `supplier`, `weight_per_box`, `status`, `note`, `created_by`, `created_at`) 
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', ?, ?, NOW())");
     
     $stmt->execute([
         $slipCode,
         $orderCode,
         $productCode,
+        $boxType,
         $issueMonth,
         $targetQty,
         $targetQty, // remaining = target lúc tạo mới

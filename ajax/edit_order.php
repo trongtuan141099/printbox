@@ -25,6 +25,8 @@ if (!canManageDirectives()) {
 $orderId     = (int)($_POST['order_id'] ?? 0);
 $orderCode   = trim($_POST['order_code'] ?? '');
 $productCode = trim($_POST['product_code'] ?? '');
+$boxType     = trim($_POST['box_type'] ?? '1');
+if (empty($boxType)) $boxType = '1';
 $issueMonth  = trim($_POST['issue_month'] ?? '');
 $targetQty   = (int)($_POST['target_qty'] ?? 0);
 $packQty     = (int)($_POST['pack_qty'] ?? 1);
@@ -68,6 +70,7 @@ try {
     $stmtUpd = $pdo->prepare("UPDATE `production_orders` SET 
         `order_code`     = ?,
         `product_code`   = ?,
+        `box_type`       = ?,
         `issue_month`    = ?,
         `target_qty`     = ?,
         `remaining_qty`  = ?,
@@ -82,6 +85,7 @@ try {
     $stmtUpd->execute([
         $orderCode,
         $productCode,
+        $boxType,
         $issueMonth,
         $targetQty,
         $newRemaining,
