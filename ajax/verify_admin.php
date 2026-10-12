@@ -16,8 +16,9 @@ if (!isLoggedIn()) {
     exit;
 }
 
-$msnv     = trim($_POST['msnv'] ?? '');
-$password = trim($_POST['password'] ?? $_POST['pass'] ?? $_POST['pin'] ?? '');
+$msnv           = trim($_POST['msnv'] ?? '');
+$password       = trim($_POST['password'] ?? $_POST['pass'] ?? $_POST['pin'] ?? '');
+$overrideReason = trim($_POST['override_reason'] ?? '');
 
 if (empty($msnv)) {
     echo json_encode(['success' => false, 'message' => 'Vui lòng nhập Mã số nhân viên (MSNV) của Quản lý / Admin / Editor!']);
@@ -29,15 +30,21 @@ if (empty($password)) {
     exit;
 }
 
+if (empty($overrideReason)) {
+    echo json_encode(['success' => false, 'message' => 'Vui lòng nhập Lý do in vượt định mức!']);
+    exit;
+}
+
 try {
     $pdo = getDbConnection();
     $manager = verifyManagerOverride($msnv, $password, $pdo);
 
     if ($manager) {
         echo json_encode([
-            'success' => true,
-            'message' => 'Xác thực duyệt vượt định mức thành công!',
-            'admin' => [
+            'success'         => true,
+            'message'         => 'Xác thực duyệt vượt định mức thành công!',
+            'override_reason' => $overrideReason,
+            'admin'           => [
                 'id'            => $manager['id'],
                 'full_name'     => $manager['full_name'],
                 'employee_code' => $manager['employee_code'],

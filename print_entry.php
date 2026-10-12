@@ -8,6 +8,9 @@ $pageTitle = "Nhập Liệu In Tem";
 require_once __DIR__ . '/includes/header.php';
 requireRole(['admin', 'editor']);
 
+$pdo = getDbConnection();
+$connectedPrinters = getConnectedPrinters();
+$defaultPrinter    = getDefaultPrinter($pdo);
 $prefillSlip = trim($_GET['slip'] ?? '');
 ?>
 
@@ -118,7 +121,29 @@ $prefillSlip = trim($_GET['slip'] ?? '');
                     <div>
                         <strong>⛔ CẢNH BÁO VƯỢT ĐỊNH MỨC:</strong><br>
                         Số lượng in (<span id="txt_excess_print">0</span>) vượt quá số lượng còn lại của chỉ thị (<span id="txt_excess_remain">0</span>)!<br>
-                        <span style="font-size:12px;color:#7f1d1d;">Bắt buộc phải có Quản lý/Admin nhập Mã số nhân viên (MSNV) để duyệt vượt mức trước khi in.</span>
+                        <span style="font-size:12px;color:#7f1d1d;">Bắt buộc phải có Quản lý/Admin nhập Mã số nhân viên (MSNV), Mật khẩu và Lý do in vượt để duyệt trước khi in.</span>
+                    </div>
+                </div>
+
+                <!-- MÁY IN TEM SỬ DỤNG MẶC ĐỊNH -->
+                <div class="form-group">
+                    <label class="form-label fw-bold">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
+                    <select id="input_printer_select" class="form-select border-primary fw-bold" onchange="onEntryPrinterChange(this.value)">
+                        <?php if (empty($connectedPrinters)): ?>
+                            <option value="<?= htmlspecialchars($defaultPrinter ?: 'Standard Label Printer (65x30mm)') ?>"><?= htmlspecialchars($defaultPrinter ?: 'Máy in tem mặc định (65x30mm)') ?></option>
+                        <?php else: ?>
+                            <?php foreach ($connectedPrinters as $p): 
+                                $pName = is_array($p) ? ($p['name'] ?? '') : (string)$p;
+                                if ($pName === '') continue;
+                            ?>
+                                <option value="<?= htmlspecialchars($pName) ?>" <?= ($pName === $defaultPrinter) ? 'selected' : '' ?>>
+                                    🖨️ <?= htmlspecialchars($pName) ?><?= (is_array($p) && !empty($p['default'])) ? ' (Mặc định hệ điều hành)' : '' ?>
+                                </option>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </select>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+                        Chỉ hiển thị các máy in kết nối thực tế với máy tính. Tự động lưu làm mặc định cho các lần in sau.
                     </div>
                 </div>
 
@@ -248,6 +273,10 @@ $prefillSlip = trim($_GET['slip'] ?? '');
                     <td style="font-weight:600;">Số tem thùng sinh ra:</td>
                     <td id="cf_box_count" style="font-weight:800;color:#15803d;font-size:16px;">-</td>
                 </tr>
+                <tr>
+                    <td style="font-weight:600;">Máy in mặc định:</td>
+                    <td id="cf_printer_name" style="font-weight:700;color:#2563eb;">-</td>
+                </tr>
                 <tr id="cf_row_odd" style="display:none;background:#fef3c7;">
                     <td style="font-weight:600;color:#b45309;">Trạng thái thùng lẻ:</td>
                     <td id="cf_odd_desc" style="font-weight:700;color:#b45309;">-</td>
@@ -259,7 +288,7 @@ $prefillSlip = trim($_GET['slip'] ?? '');
             </table>
 
             <div style="font-size:13px;color:#64748b;">
-                Hệ thống sẽ tự động cập nhật số lượng đã in vào CSDL và sinh mã tem thùng theo thứ tự.
+                Hệ thống sẽ tự động cập nhật số lượng đã in vào CSDL, sinh mã tem thùng và gửi lệnh in trực tiếp đến máy in mặc định.
             </div>
         </div>
         <div class="modal-footer">
@@ -272,13 +301,13 @@ $prefillSlip = trim($_GET['slip'] ?? '');
 </div>
 
 <!-- =======================================================
-     MODAL 2: DUYỆT VƯỢT ĐỊNH MỨC DÀNH CHO ADMIN (MSNV APPROVAL)
+     MODAL 2: DUYỆT VƯỢT ĐỊNH MỨC DÀNH CHO ADMIN (MSNV, PASSWORD & LÝ DO)
      ======================================================= -->
 <div id="modal_admin_approval" class="modal-overlay">
     <div class="modal-dialog">
         <div class="modal-header" style="background:#fee2e2;">
             <span class="modal-title" style="color:#991b1b;">
-                🛡️ Yêu Cầu Duyệt Vượt Định Mức
+                🛡️ Yêu Cầu Ủy Quyền Duyệt Vượt Định Mức
             </span>
             <button type="button" class="modal-close" onclick="closeModal('modal_admin_approval')">&times;</button>
         </div>
@@ -289,7 +318,7 @@ $prefillSlip = trim($_GET['slip'] ?? '');
             </div>
 
             <p style="margin-bottom:12px;font-weight:600;color:#334155;">
-                Vui lòng nhờ Quản lý / Admin / Editor nhập Mã số nhân viên (MSNV) và Mật khẩu để xác nhận cho phép vượt định mức:
+                Vui lòng nhờ Quản lý / Admin / Editor nhập Mã số nhân viên (MSNV), Mật khẩu và Lý do in vượt để xác nhận ủy quyền:
             </p>
 
             <div class="form-group">
@@ -302,6 +331,12 @@ $prefillSlip = trim($_GET['slip'] ?? '');
                 <label class="form-label required">Mật khẩu xác thực (Password / PIN)</label>
                 <input type="password" id="input_admin_pass" class="form-control form-control-lg" 
                        placeholder="Nhập mật khẩu tài khoản người duyệt..." autocomplete="off">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label required">Lý do in vượt định mức</label>
+                <textarea id="input_override_reason" class="form-control" rows="2"
+                          placeholder="Nhập rõ lý do in vượt định mức (bắt buộc, vd: In bù hàng NG, thay thế tem hỏng)..."></textarea>
                 <div id="admin_verify_feedback" style="font-size:13px;margin-top:6px;font-weight:600;"></div>
             </div>
         </div>
@@ -321,7 +356,7 @@ $prefillSlip = trim($_GET['slip'] ?? '');
     <div class="modal-dialog" style="max-width:850px;">
         <div class="modal-header no-print">
             <span class="modal-title">🖨️ Tem Thùng Đã Sinh - Sẵn Sàng In</span>
-            <button type="button" class="modal-close" onclick="closeModal('modal_print_result')">&times;</button>
+            <button type="button" class="modal-close" onclick="closeModal('modal_print_result')" title="Thoát">&times;</button>
         </div>
         <div class="modal-body">
             <div class="alert alert-success no-print" style="margin-bottom:16px;">
@@ -344,7 +379,7 @@ $prefillSlip = trim($_GET['slip'] ?? '');
         </div>
         <div class="modal-footer no-print">
             <button type="button" class="btn btn-secondary" onclick="resetFormForNext()">🔄 Nhập đơn tiếp theo</button>
-            <button type="button" class="btn btn-primary" onclick="triggerDirectPrint()">🖨️ In Lại</button>
+            <button type="button" class="btn btn-primary" onclick="triggerDirectPrint()">🖨️ Gửi Lệnh In</button>
         </div>
     </div>
 </div>
@@ -355,13 +390,30 @@ let currentOrder = null;
 let currentCalculation = null;
 let verifiedAdminMsnv = null;
 let verifiedAdminPass = null;
+let verifiedOverrideReason = null;
 
 // HÀM MỞ / ĐÓNG MODAL
 function openModal(id) {
     document.getElementById(id).classList.add('active');
 }
-function closeModal(id) {
-    document.getElementById(id).classList.remove('active');
+function closeModal(id, forceClose = false) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === 'modal_print_result' && el.classList.contains('active') && !forceClose) {
+        if (!window.confirm('Bạn có chắc chắn đã in rồi hay không?')) {
+            return;
+        }
+    }
+    el.classList.remove('active');
+}
+
+function onEntryPrinterChange(printerName) {
+    if (!printerName) return;
+    try { localStorage.setItem('mes_default_printer', printerName); } catch (e) {}
+    const fd = new FormData();
+    fd.append('action', 'save_default_printer');
+    fd.append('printer_name', printerName);
+    fetch('orders.php', { method: 'POST', body: fd }).catch(() => {});
 }
 
 // BƯỚC 1: TRA CỨU CHỈ THỊ THEO MÃ PHIẾU HOẶC MÃ CHỈ THỊ
@@ -396,6 +448,8 @@ function searchOrder() {
             // Gán dữ liệu chỉ thị
             currentOrder = data.order;
             verifiedAdminMsnv = null;
+            verifiedAdminPass = null;
+            verifiedOverrideReason = null;
 
             // Hiển thị thông tin
             document.getElementById('disp_slip_code').innerText = currentOrder.slip_code;
@@ -474,6 +528,7 @@ function recalculate() {
     // Reset xác thực duyệt vượt mức khi số lượng thay đổi
     verifiedAdminMsnv = null;
     verifiedAdminPass = null;
+    verifiedOverrideReason = null;
 
     if (isNaN(printQtyVal) || printQtyVal <= 0) {
         document.getElementById('calc_placeholder').style.display = 'block';
@@ -485,9 +540,6 @@ function recalculate() {
         return;
     }
 
-    // Công thức tính chuẩn:
-    // full_boxes = floor(printed_qty / package_spec)
-    // remainder  = printed_qty % package_spec
     const fullBoxes = Math.floor(printQtyVal / packQty);
     const remainder = printQtyVal % packQty;
     const hasOdd = (remainder > 0);
@@ -510,13 +562,11 @@ function recalculate() {
     document.getElementById('calc_print_qty').innerText = printQtyVal.toLocaleString() + ' con';
     document.getElementById('calc_full_boxes').innerText = fullBoxes + ' thùng (' + (fullBoxes * packQty) + ' con)';
     
-    // Condition 1: remainder == 0 -> KHÔNG hiển thị cảnh báo thùng lẻ, KHÔNG yêu cầu in lẻ
     if (!hasOdd) {
         document.getElementById('row_calc_odd').style.display = 'none';
         document.getElementById('odd_box_option').style.display = 'none';
         document.getElementById('chk_is_odd_box').checked = false;
     } else {
-        // Condition 2: remainder > 0 -> Hiển thị cảnh báo và bắt buộc tích chọn in lẻ (Unchecked by default)
         document.getElementById('row_calc_odd').style.display = 'flex';
         document.getElementById('calc_odd_qty').innerText = '1 thùng lẻ (' + remainder + ' con)';
         document.getElementById('odd_box_option').style.display = 'block';
@@ -553,17 +603,23 @@ document.getElementById('btn_submit_step').addEventListener('click', function() 
         return;
     }
 
-    // Nếu in vượt số còn lại và chưa có admin/editor duyệt bằng MSNV + Mật khẩu
-    if (printQty > remaining && (!verifiedAdminMsnv || !verifiedAdminPass)) {
+    // Nếu in vượt số còn lại và chưa có admin/editor duyệt bằng MSNV + Mật khẩu + Lý do
+    if (printQty > remaining && (!verifiedAdminMsnv || !verifiedAdminPass || !verifiedOverrideReason)) {
         document.getElementById('modal_req_qty').innerText = printQty.toLocaleString();
         document.getElementById('modal_rem_qty').innerText = remaining.toLocaleString();
         document.getElementById('modal_diff_qty').innerText = '+' + (printQty - remaining).toLocaleString() + ' con';
         document.getElementById('input_admin_msnv').value = '';
         document.getElementById('input_admin_pass').value = '';
+        document.getElementById('input_override_reason').value = '';
         document.getElementById('admin_verify_feedback').innerText = '';
         openModal('modal_admin_approval');
         return;
     }
+
+    const printerSelect = document.getElementById('input_printer_select');
+    const selectedPrinter = printerSelect ? printerSelect.value : 'Standard Label Printer (65x30mm)';
+    const cfPrinterEl = document.getElementById('cf_printer_name');
+    if (cfPrinterEl) cfPrinterEl.innerText = selectedPrinter;
 
     // Hiển thị hộp thoại xác nhận trước khi thao tác
     document.getElementById('cf_slip_code').innerText = currentOrder.slip_code;
@@ -583,7 +639,7 @@ document.getElementById('btn_submit_step').addEventListener('click', function() 
 
     if (printQty > remaining) {
         document.getElementById('cf_row_over').style.display = 'table-row';
-        document.getElementById('cf_over_desc').innerText = 'Đã ủy quyền duyệt bởi: ' + verifiedAdminMsnv;
+        document.getElementById('cf_over_desc').innerText = 'Người duyệt: ' + verifiedAdminMsnv + ' | Lý do: ' + verifiedOverrideReason;
     } else {
         document.getElementById('cf_row_over').style.display = 'none';
     }
@@ -591,10 +647,11 @@ document.getElementById('btn_submit_step').addEventListener('click', function() 
     openModal('modal_confirm');
 });
 
-// XÁC THỰC MSNV & MẬT KHẨU ADMIN/EDITOR DUYỆT VƯỢT MỨC
+// XÁC THỰC MSNV, MẬT KHẨU & LÝ DO ADMIN/EDITOR DUYỆT VƯỢT MỨC
 document.getElementById('btn_verify_and_proceed').addEventListener('click', function() {
     const msnv = document.getElementById('input_admin_msnv').value.trim();
     const pass = document.getElementById('input_admin_pass').value.trim();
+    const overrideReason = document.getElementById('input_override_reason').value.trim();
 
     if (!msnv) {
         alert('Vui lòng nhập Mã số nhân viên Admin/Editor!');
@@ -608,6 +665,12 @@ document.getElementById('btn_verify_and_proceed').addEventListener('click', func
         return;
     }
 
+    if (!overrideReason) {
+        alert('Vui lòng nhập Lý do in vượt định mức (bắt buộc)!');
+        document.getElementById('input_override_reason').focus();
+        return;
+    }
+
     const fb = document.getElementById('admin_verify_feedback');
     fb.style.color = '#2563eb';
     fb.innerText = 'Đang kiểm tra quyền duyệt...';
@@ -615,6 +678,7 @@ document.getElementById('btn_verify_and_proceed').addEventListener('click', func
     const formData = new FormData();
     formData.append('msnv', msnv);
     formData.append('password', pass);
+    formData.append('override_reason', overrideReason);
 
     fetch('ajax/verify_admin.php', {
         method: 'POST',
@@ -627,6 +691,7 @@ document.getElementById('btn_verify_and_proceed').addEventListener('click', func
             fb.innerText = '✓ Xác thực thành công: ' + data.admin.full_name + ' (' + data.admin.employee_code + ' - ' + data.admin.role.toUpperCase() + ')';
             verifiedAdminMsnv = data.admin.employee_code;
             verifiedAdminPass = pass;
+            verifiedOverrideReason = overrideReason;
             
             setTimeout(() => {
                 closeModal('modal_admin_approval');
@@ -638,6 +703,7 @@ document.getElementById('btn_verify_and_proceed').addEventListener('click', func
             fb.innerText = '✗ ' + data.message;
             verifiedAdminMsnv = null;
             verifiedAdminPass = null;
+            verifiedOverrideReason = null;
         }
     })
     .catch(err => {
@@ -645,6 +711,7 @@ document.getElementById('btn_verify_and_proceed').addEventListener('click', func
         fb.innerText = 'Lỗi kết nối: ' + err.message;
         verifiedAdminMsnv = null;
         verifiedAdminPass = null;
+        verifiedOverrideReason = null;
     });
 });
 
@@ -654,12 +721,17 @@ document.getElementById('btn_final_submit').addEventListener('click', function()
     btn.disabled = true;
     btn.innerText = '⏳ Đang lưu & sinh mã QR...';
 
+    const printerSelect = document.getElementById('input_printer_select');
+    const selectedPrinter = printerSelect ? printerSelect.value : 'Standard Label Printer (65x30mm)';
+
     const formData = new FormData();
     formData.append('order_id', currentOrder.id);
     formData.append('print_qty', currentCalculation.printQty);
     formData.append('is_odd_box', (currentCalculation.hasOdd && document.getElementById('chk_is_odd_box').checked) ? 1 : 0);
     formData.append('admin_msnv', verifiedAdminMsnv || '');
     formData.append('admin_pass', verifiedAdminPass || '');
+    formData.append('override_reason', verifiedOverrideReason || '');
+    formData.append('printer_name', selectedPrinter);
     formData.append('note', document.getElementById('input_note').value.trim());
 
     fetch('ajax/submit_print.php', {
@@ -676,11 +748,13 @@ document.getElementById('btn_final_submit').addEventListener('click', function()
                 closeModal('modal_confirm');
                 verifiedAdminMsnv = null;
                 verifiedAdminPass = null;
+                verifiedOverrideReason = null;
                 document.getElementById('modal_req_qty').innerText = (data.print_qty || currentCalculation.printQty).toLocaleString();
                 document.getElementById('modal_rem_qty').innerText = (data.remaining_qty !== undefined ? data.remaining_qty : currentOrder.remaining_qty).toLocaleString();
                 document.getElementById('modal_diff_qty').innerText = '+' + ((data.excess_qty !== undefined ? data.excess_qty : (currentCalculation.printQty - currentOrder.remaining_qty))).toLocaleString() + ' con';
                 document.getElementById('input_admin_msnv').value = '';
                 document.getElementById('input_admin_pass').value = '';
+                document.getElementById('input_override_reason').value = '';
                 document.getElementById('admin_verify_feedback').innerText = data.message;
                 document.getElementById('admin_verify_feedback').style.color = '#b91c1c';
                 openModal('modal_admin_approval');
@@ -701,8 +775,11 @@ document.getElementById('btn_final_submit').addEventListener('click', function()
         renderPrintedLabels(data.labels);
         document.getElementById('res_box_count').innerText = data.labels.length;
 
-        // Mở modal in tem
+        // Mở modal in tem và tự động gửi lệnh in ra máy in mặc định
         openModal('modal_print_result');
+        setTimeout(() => {
+            triggerDirectPrint();
+        }, 250);
     })
     .catch(err => {
         btn.disabled = false;
@@ -743,6 +820,9 @@ function triggerDirectPrint() {
 // TIẾP TỤC ĐƠN KHÁC
 function resetFormForNext() {
     closeModal('modal_print_result');
+    if (document.getElementById('modal_print_result').classList.contains('active')) {
+        return;
+    }
     document.getElementById('input_query').value = '';
     document.getElementById('input_query').focus();
     document.getElementById('order_info_card').style.display = 'none';
@@ -752,6 +832,8 @@ function resetFormForNext() {
     currentOrder = null;
     currentCalculation = null;
     verifiedAdminMsnv = null;
+    verifiedAdminPass = null;
+    verifiedOverrideReason = null;
 }
 
 function escapeHtml(str) {

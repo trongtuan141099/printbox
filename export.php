@@ -15,40 +15,95 @@ $type = trim($_GET['type'] ?? 'history');
 // TẢI FILE MẪU IMPORT (UTF-8 KÈM BOM CHO EXCEL)
 // ========================================================
 if ($type === 'sample_orders') {
-    $filePath = __DIR__ . '/sample_orders.csv';
-    if (!file_exists($filePath)) {
-        http_response_code(404);
-        exit('File mẫu chỉ thị sản xuất không tồn tại!');
+    while (ob_get_level() > 0) {
+        ob_end_clean();
     }
+    $candidates = [
+        __DIR__ . '/data/sample_orders.csv',
+        __DIR__ . '/data/sample_orders_0910.csv',
+        __DIR__ . '/data/sample_orders 0910.csv',
+        __DIR__ . '/sample_orders.csv'
+    ];
+    $filePath = null;
+    foreach ($candidates as $cand) {
+        if (file_exists($cand) && is_readable($cand)) {
+            $filePath = $cand;
+            break;
+        }
+    }
+
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="sample_orders.csv"');
     header('Pragma: no-cache');
     header('Expires: 0');
     header('Cache-Control: no-store, no-cache, must-revalidate, post-check=0, pre-check=0');
-    header('Content-Length: ' . filesize($filePath));
-    readfile($filePath);
+
+    if ($filePath !== null) {
+        $content = file_get_contents($filePath);
+        if (substr($content, 0, 3) !== "\xEF\xBB\xBF") {
+            $content = "\xEF\xBB\xBF" . $content;
+        }
+        header('Content-Length: ' . strlen($content));
+        echo $content;
+        exit;
+    }
+
+    $output = fopen('php://output', 'w');
+    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+    fputcsv($output, ['Mã phiếu', 'Mã chỉ thị', 'Mã sản phẩm', 'Tháng phát hành', 'Số lượng chỉ thị', 'Ghi chú']);
+    fputcsv($output, ['579142', 'P260906052', 'TU0425B-20Z2', '10/2026', '10575', '']);
+    fputcsv($output, ['579143', 'P260906053', 'TU0425BU-20Z2', '10/2026', '10800', '']);
+    fclose($output);
     exit;
 }
 
 if ($type === 'sample_specs') {
-    $filePath = __DIR__ . '/sample_specs.csv';
-    if (!file_exists($filePath)) {
-        http_response_code(404);
-        exit('File mẫu quy cách đóng gói không tồn tại!');
+    while (ob_get_level() > 0) {
+        ob_end_clean();
     }
+    $candidates = [
+        __DIR__ . '/data/sample_specs.csv',
+        __DIR__ . '/data/sample_specs_0910.csv',
+        __DIR__ . '/data/sample_specs 0910.csv',
+        __DIR__ . '/sample_specs.csv'
+    ];
+    $filePath = null;
+    foreach ($candidates as $cand) {
+        if (file_exists($cand) && is_readable($cand)) {
+            $filePath = $cand;
+            break;
+        }
+    }
+
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="sample_specs.csv"');
     header('Pragma: no-cache');
     header('Expires: 0');
     header('Cache-Control: no-store, no-cache, must-revalidate, post-check=0, pre-check=0');
-    header('Content-Length: ' . filesize($filePath));
-    readfile($filePath);
+
+    if ($filePath !== null) {
+        $content = file_get_contents($filePath);
+        if (substr($content, 0, 3) !== "\xEF\xBB\xBF") {
+            $content = "\xEF\xBB\xBF" . $content;
+        }
+        header('Content-Length: ' . strlen($content));
+        echo $content;
+        exit;
+    }
+
+    $output = fopen('php://output', 'w');
+    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+    fputcsv($output, ['Mã sản phẩm', 'Loại thùng', 'Quy cách (con/thùng)', 'Nhà cung cấp', 'Trọng lượng (Kg/thùng)', 'Đơn vị tính', 'Mô tả']);
+    fputcsv($output, ['TU0425B-20Z2', '1/2', '225', 'SMC Factory 2', '', 'roll', '']);
+    fputcsv($output, ['TU0425BU-20Z2', '1/2', '225', 'SMC Factory 2', '', 'roll', '']);
+    fclose($output);
     exit;
 }
 
 requireAuth();
 
 $pdo = getDbConnection();
+ensurePrintHistorySchema($pdo);
 
 if ($type === 'orders') {
     // ========================================================
@@ -70,6 +125,10 @@ if ($type === 'orders') {
             WHERE 1=1";
     $params = [];
 
+    if (isViewer()) {
+        $sql .= " AND po.`status` != 'paused'";
+    }
+
     if (!empty($keyword)) {
         $sql .= " AND (po.`slip_code` LIKE ? OR po.`order_code` LIKE ? OR po.`product_code` LIKE ? OR po.`supplier` LIKE ?)";
         $kParam = "%{$keyword}%";
@@ -79,7 +138,7 @@ if ($type === 'orders') {
         $params[] = $kParam;
     }
 
-    if (!empty($status)) {
+    if (!empty($status) && !(isViewer() && $status === 'paused')) {
         $sql .= " AND po.`status` = ?";
         $params[] = $status;
     }
@@ -99,7 +158,29 @@ if ($type === 'orders') {
         $params[] = $toDate;
     }
 
-    $sql .= " ORDER BY po.`id` DESC";
+    $sql .= " ORDER BY 
+        CASE WHEN po.`status` = 'completed' THEN 1 ELSE 0 END ASC,
+        COALESCE(
+            STR_TO_DATE(TRIM(po.`issue_month`), '%d/%m/%Y'),
+            STR_TO_DATE(TRIM(po.`issue_month`), '%Y-%m-%d'),
+            STR_TO_DATE(TRIM(po.`issue_month`), '%Y/%m/%d'),
+            STR_TO_DATE(CONCAT('01/', TRIM(po.`issue_month`)), '%d/%m/%Y'),
+            STR_TO_DATE(CONCAT('01-', TRIM(po.`issue_month`)), '%d-%m-%Y'),
+            STR_TO_DATE(CONCAT('01-', TRIM(po.`issue_month`)), '%d-%b-%Y'),
+            STR_TO_DATE(CONCAT('01/', TRIM(po.`issue_month`)), '%d/%b/%Y'),
+            STR_TO_DATE(CONCAT(TRIM(po.`issue_month`), '-01'), '%Y-%m-%d'),
+            STR_TO_DATE(CONCAT(TRIM(po.`issue_month`), '/01'), '%Y/%m/%d'),
+            DATE(po.`created_at`)
+        ) DESC,
+        CASE po.`status`
+            WHEN 'in_progress' THEN 1
+            WHEN 'pending'     THEN 2
+            WHEN 'paused'      THEN 3
+            WHEN 'completed'   THEN 4
+            ELSE 5
+        END ASC,
+        po.`created_at` DESC,
+        po.`id` DESC";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -312,7 +393,8 @@ if ($type === 'orders') {
         'Số lượng lẻ',
         'Danh sách Box No',
         'Tình trạng định mức',
-        'Admin duyệt vượt mức',
+        'MSNV duyệt vượt mức',
+        'Nội dung & Lý do in vượt',
         'Người thực hiện',
         'MSNV người in',
         'Ghi chú'
@@ -342,6 +424,7 @@ if ($type === 'orders') {
             $boxListStr,
             $overTargetStr,
             $r['approved_by_msnv'] ?? '',
+            $r['override_reason'] ?? '',
             $r['operator_name'],
             $r['operator_msnv'],
             $r['note'] ?? ''

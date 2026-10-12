@@ -586,3 +586,157 @@ function getFlash() {
     }
     return null;
 }
+
+/**
+ * Đảm bảo bảng print_history có cột override_reason để lưu lý do in vượt định mức
+ */
+function ensurePrintHistorySchema(PDO $pdo = null) {
+    static $checked = false;
+    if ($checked) return;
+    $checked = true;
+
+    if ($pdo === null) {
+        $pdo = getDbConnection();
+    }
+    try {
+        $stmt = $pdo->query("SHOW COLUMNS FROM `print_history` LIKE 'override_reason'");
+        if (!$stmt->fetch()) {
+            $pdo->exec("ALTER TABLE `print_history` ADD COLUMN `override_reason` TEXT DEFAULT NULL AFTER `approved_by_msnv`");
+        }
+    } catch (Exception $e) {
+        // Ignore if already exists or lacks DDL privileges
+    }
+}
+
+/**
+ * Lấy danh sách các máy in có kết nối thực tế (WorkOffline = false) với máy tính hiện tại
+ * @param bool $forceRefresh Bỏ qua cache để quét lại máy in
+ * @return array Danh sách máy in [['name' => string, 'default' => bool, 'port' => string, 'status' => int]]
+ */
+function getConnectedPrinters($forceRefresh = false) {
+    if (session_status() === PHP_SESSION_NONE) {
+        @session_start();
+    }
+
+    if (
+        !$forceRefresh &&
+        isset($_SESSION['connected_printers_cache'], $_SESSION['connected_printers_ts']) &&
+        (time() - (int)$_SESSION['connected_printers_ts']) < 60 &&
+        is_array($_SESSION['connected_printers_cache']) &&
+        !empty($_SESSION['connected_printers_cache'])
+    ) {
+        return $_SESSION['connected_printers_cache'];
+    }
+
+    $printers = [];
+
+    if (stripos(PHP_OS_FAMILY, 'Windows') !== false && function_exists('shell_exec')) {
+        $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Printer -Filter \'WorkOffline = false\' | Select-Object Name, Default, WorkOffline, PrinterStatus, PortName | ConvertTo-Json -Compress" 2>nul';
+        $output = @shell_exec($cmd);
+        if (!empty($output)) {
+            $decoded = json_decode(trim($output), true);
+            if (is_array($decoded)) {
+                if (isset($decoded['Name'])) {
+                    $decoded = [$decoded];
+                }
+                foreach ($decoded as $item) {
+                    if (!is_array($item) || empty($item['Name'])) continue;
+                    $workOffline = !empty($item['WorkOffline']);
+                    $printerStatus = (int)($item['PrinterStatus'] ?? 3);
+                    // Chỉ giữ các máy in kết nối thực tế (không bị Offline - status 7)
+                    if ($workOffline || $printerStatus === 7) continue;
+
+                    $printers[] = [
+                        'name'    => trim((string)$item['Name']),
+                        'default' => !empty($item['Default']),
+                        'port'    => trim((string)($item['PortName'] ?? '')),
+                        'status'  => $printerStatus
+                    ];
+                }
+            }
+        }
+    }
+
+    $_SESSION['connected_printers_cache'] = $printers;
+    $_SESSION['connected_printers_ts']    = time();
+
+    return $printers;
+}
+
+/**
+ * Lấy máy in mặc định đã cấu hình cho hệ thống/người dùng (khớp với danh sách máy in kết nối thực tế)
+ * @param PDO|null $pdo
+ * @param bool $forceRefresh
+ * @return string
+ */
+function getDefaultPrinter(PDO $pdo = null, $forceRefresh = false) {
+    if (session_status() === PHP_SESSION_NONE) {
+        @session_start();
+    }
+    if ($pdo === null) {
+        $pdo = getDbConnection();
+    }
+
+    $connected = getConnectedPrinters($forceRefresh);
+    $connectedNames = array_column($connected, 'name');
+
+    $settings = getSystemSettings($pdo, $forceRefresh);
+    $savedUserPrinter = trim($_SESSION['default_printer'] ?? '');
+    $savedSysPrinter  = trim($settings['default_printer'] ?? '');
+
+    if (!empty($connectedNames)) {
+        if ($savedUserPrinter !== '' && in_array($savedUserPrinter, $connectedNames, true)) {
+            return $savedUserPrinter;
+        }
+        if ($savedSysPrinter !== '' && in_array($savedSysPrinter, $connectedNames, true)) {
+            return $savedSysPrinter;
+        }
+        foreach ($connected as $p) {
+            if (!empty($p['default'])) {
+                return $p['name'];
+            }
+        }
+        return $connectedNames[0];
+    }
+
+    if ($savedUserPrinter !== '') return $savedUserPrinter;
+    if ($savedSysPrinter !== '') return $savedSysPrinter;
+    return 'Microsoft Print to PDF';
+}
+
+/**
+ * Lưu máy in mặc định cho hệ thống và người dùng, đồng thời đặt làm máy in mặc định của Windows
+ * @param string $printerName
+ * @param PDO|null $pdo
+ * @return bool
+ */
+function saveDefaultPrinter($printerName, PDO $pdo = null) {
+    if (session_status() === PHP_SESSION_NONE) {
+        @session_start();
+    }
+    $printerName = trim((string)$printerName);
+    if ($printerName === '') {
+        return false;
+    }
+
+    if ($pdo === null) {
+        $pdo = getDbConnection();
+    }
+
+    $_SESSION['default_printer'] = $printerName;
+    updateSystemSetting('default_printer', $printerName, $pdo);
+
+    if (stripos(PHP_OS_FAMILY, 'Windows') !== false && function_exists('shell_exec')) {
+        $escapedPrinter = str_replace('"', '\"', $printerName);
+        @shell_exec('rundll32 printui.dll,PrintUIEntry /y /n "' . $escapedPrinter . '" 2>nul');
+        if (isset($_SESSION['connected_printers_cache']) && is_array($_SESSION['connected_printers_cache'])) {
+            foreach ($_SESSION['connected_printers_cache'] as &$p) {
+                $p['default'] = ($p['name'] === $printerName);
+            }
+            unset($p);
+        }
+    }
+
+    return true;
+}
+

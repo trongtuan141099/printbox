@@ -9,6 +9,11 @@ require_once __DIR__ . '/includes/functions.php';
 
 requireAuth();
 
+// Vô hiệu hóa tính năng in lại tem cũ để tránh nhầm lẫn
+setFlash('warning', 'Tính năng in lại tem cũ đã bị vô hiệu hóa để tránh nhầm lẫn. Vui lòng thực hiện tạo và in tem mới tại màn hình Chỉ Thị SX!');
+header('Location: history.php');
+exit;
+
 $historyId = (int)($_GET['history_id'] ?? 0);
 $boxId     = (int)($_GET['box_id'] ?? 0);
 $autoPrint = isset($_GET['autoprint']) ? 1 : 0;

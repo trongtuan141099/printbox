@@ -8,6 +8,7 @@ $pageTitle = "Lịch Sử In Tem";
 require_once __DIR__ . '/includes/header.php';
 
 $pdo = getDbConnection();
+ensurePrintHistorySchema($pdo);
 
 // LẤY DANH SÁCH NHÂN VIÊN ĐỂ LỌC
 $operators = $pdo->query("SELECT id, full_name, employee_code FROM `users` ORDER BY `full_name` ASC")->fetchAll();
@@ -21,9 +22,10 @@ $productCode  = trim($_GET['product_code'] ?? '');
 $operatorId   = (int)($_GET['operator_id'] ?? 0);
 $isOverTarget = trim($_GET['is_over_target'] ?? '');
 
-$sql = "SELECT ph.*, po.supplier, po.target_qty, po.issue_month 
+$sql = "SELECT ph.*, po.supplier, po.target_qty, po.issue_month, u_app.full_name AS approver_name 
         FROM `print_history` ph 
         LEFT JOIN `production_orders` po ON ph.order_id = po.id 
+        LEFT JOIN `users` u_app ON ph.approved_by_id = u_app.id
         WHERE 1=1";
 $params = [];
 
@@ -198,15 +200,14 @@ $hasFilter   = (!empty($fromDate) || !empty($toDate) || !empty($slipCode) || !em
                         <th class="text-center">Số Tem Thùng</th>
                         <th>Phân Loại Thùng</th>
                         <th>Danh Sách Box No</th>
-                        <th class="text-center">Định Mức</th>
+                        <th style="min-width:260px;">Định Mức &amp; Thông Tin Vượt Mức</th>
                         <th>Người Thực Hiện</th>
-                        <th class="text-center" style="width:110px;">Thao Tác</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if (empty($historyList)): ?>
                         <tr>
-                            <td colspan="11" style="text-align:center;padding:30px;color:var(--text-muted);">
+                            <td colspan="10" style="text-align:center;padding:30px;color:var(--text-muted);">
                                 Không có lịch sử in nào phù hợp với bộ lọc.
                             </td>
                         </tr>
@@ -222,9 +223,33 @@ $hasFilter   = (!empty($fromDate) || !empty($toDate) || !empty($slipCode) || !em
                                     $boxSummary = $boxNumbers[0] . ' &rarr; ' . $boxNumbers[$boxCount - 1];
                                 }
                             }
+
+                            // Phân tách Lý do & Nội dung vượt định mức để hiển thị rõ ràng
+                            $rawOverride = trim($row['override_reason'] ?? '');
+                            $overrideReasonText = '';
+                            $overrideContentText = "In " . number_format($row['print_qty']) . " con (Phiếu " . $row['slip_code'] . " - Lot " . $row['order_code'] . ")";
+                            if (!empty($rawOverride)) {
+                                if (str_contains($rawOverride, '|')) {
+                                    $ovParts = array_map('trim', explode('|', $rawOverride));
+                                    foreach ($ovParts as $part) {
+                                        if (stripos($part, 'Lý do:') === 0) {
+                                            $overrideReasonText = trim(substr($part, strlen('Lý do:')));
+                                        } elseif (stripos($part, 'Nội dung:') === 0) {
+                                            $overrideContentText = trim(substr($part, strlen('Nội dung:')));
+                                        }
+                                    }
+                                    if ($overrideReasonText === '') {
+                                        $overrideReasonText = $rawOverride;
+                                    }
+                                } else {
+                                    $overrideReasonText = $rawOverride;
+                                }
+                            } elseif ($row['is_over_target'] && !empty($row['note'])) {
+                                $overrideReasonText = $row['note'];
+                            }
                         ?>
-                        <tr>
-                            <td>#<?= $row['id'] ?></td>
+                        <tr class="<?= $row['is_over_target'] ? 'table-danger-subtle' : '' ?>">
+                            <td class="text-center">#<?= $row['id'] ?></td>
                             <td style="font-size:13px;white-space:nowrap;">
                                 <?= formatDateTime($row['created_at']) ?>
                             </td>
@@ -257,24 +282,24 @@ $hasFilter   = (!empty($fromDate) || !empty($toDate) || !empty($slipCode) || !em
                                     <a href="javascript:void(0)" onclick="showBoxListModal(<?= htmlspecialchars(json_encode($boxNumbers)) ?>)" style="font-size:11px;color:#2563eb;margin-left:4px;">(Xem <?= $boxCount ?> mã)</a>
                                 <?php endif; ?>
                             </td>
-                            <td style="text-align:center;">
+                            <td>
                                 <?php if ($row['is_over_target']): ?>
-                                    <span class="badge badge-danger" title="Duyệt bởi Admin MSNV: <?= htmlspecialchars($row['approved_by_msnv']) ?>">
-                                        ⚠️ Vượt Mức
-                                    </span>
-                                    <div style="font-size:10px;color:#991b1b;margin-top:2px;">Duyệt: <?= htmlspecialchars($row['approved_by_msnv']) ?></div>
+                                    <div class="p-2 rounded border border-danger-subtle bg-danger-subtle text-start" style="font-size:12px;line-height:1.45;">
+                                        <div class="mb-1">
+                                            <span class="badge badge-danger">⚠️ Vượt Định Mức</span>
+                                        </div>
+                                        <div><strong>👤 MSNV duyệt:</strong> <span class="text-danger fw-bold"><?= htmlspecialchars($row['approved_by_msnv'] ?: '-') ?></span><?= !empty($row['approver_name']) ? ' (' . htmlspecialchars($row['approver_name']) . ')' : '' ?></div>
+                                        <div><strong>🕒 Thời gian:</strong> <?= formatDateTime($row['created_at']) ?></div>
+                                        <div><strong>📋 Nội dung:</strong> <?= htmlspecialchars($overrideContentText) ?></div>
+                                        <div><strong>📝 Lý do in vượt:</strong> <span class="fw-bold text-danger"><?= htmlspecialchars($overrideReasonText ?: 'Chưa ghi nhận') ?></span></div>
+                                    </div>
                                 <?php else: ?>
-                                    <span class="badge badge-neutral">Chuẩn</span>
+                                    <span class="badge badge-neutral">Đúng định mức</span>
                                 <?php endif; ?>
                             </td>
                             <td style="font-size:13px;">
                                 <strong><?= htmlspecialchars($row['operator_name']) ?></strong>
                                 <div style="font-size:11px;color:var(--text-muted);"><?= htmlspecialchars($row['operator_msnv']) ?></div>
-                            </td>
-                            <td style="text-align:center;">
-                                <a href="print_labels.php?history_id=<?= $row['id'] ?>" target="_blank" class="btn btn-sm btn-outline-primary" title="In lại bộ tem này">
-                                    🖨️ In Lại
-                                </a>
                             </td>
                         </tr>
                         <?php endforeach; ?>

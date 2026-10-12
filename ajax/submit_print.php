@@ -23,16 +23,13 @@ if (!canPrint()) {
 
 $currentUser = getCurrentUser();
 
-$orderId    = (int)($_POST['order_id'] ?? 0);
-$printQty   = (int)($_POST['print_qty'] ?? 0);
-$isOddBox   = (int)($_POST['is_odd_box'] ?? 0);
-$adminMsnv  = trim($_POST['admin_msnv'] ?? '');
-$adminPass  = trim($_POST['admin_pass'] ?? $_POST['admin_password'] ?? '');
-$note       = trim($_POST['note'] ?? '');
-$printerDestination = trim($_POST['printer_name'] ?? $_POST['printer_destination'] ?? 'ZDesigner / Zebra (65x30mm)');
-if (empty($printerDestination)) {
-    $printerDestination = 'ZDesigner / Zebra (65x30mm)';
-}
+$orderId        = (int)($_POST['order_id'] ?? 0);
+$printQty       = (int)($_POST['print_qty'] ?? 0);
+$isOddBox       = (int)($_POST['is_odd_box'] ?? 0);
+$adminMsnv      = trim($_POST['admin_msnv'] ?? '');
+$adminPass      = trim($_POST['admin_pass'] ?? $_POST['admin_password'] ?? '');
+$overrideReason = trim($_POST['override_reason'] ?? '');
+$note           = trim($_POST['note'] ?? '');
 
 if ($orderId <= 0) {
     echo json_encode(['success' => false, 'message' => 'Chưa chọn chỉ thị sản xuất hợp lệ!']);
@@ -45,6 +42,14 @@ if ($printQty <= 0) {
 }
 
 $pdo = getDbConnection();
+ensurePrintHistorySchema($pdo);
+
+$printerDestination = trim($_POST['printer_name'] ?? $_POST['printer_destination'] ?? '');
+if (empty($printerDestination)) {
+    $printerDestination = getDefaultPrinter($pdo);
+} else {
+    saveDefaultPrinter($printerDestination, $pdo);
+}
 
 try {
     $pdo->beginTransaction();
@@ -100,11 +105,11 @@ try {
     $isOverTarget = 0;
     $approvedByMsnv = null;
     $approvedById   = null;
+    $savedOverrideReason = null;
 
-    // KIỂM TRA ĐỊNH MỨC: Bắt buộc xác thực MSNV VÀ Mật khẩu của Admin/Editor nếu in vượt số còn lại
-    // Ngay cả khi người dùng đăng nhập là Admin hoặc Editor, vẫn bắt buộc cung cấp MSNV + Mật khẩu để ủy quyền!
+    // KIỂM TRA ĐỊNH MỨC: Bắt buộc xác thực MSNV, Mật khẩu VÀ Lý do in vượt của Admin/Editor nếu in vượt số còn lại
     if ($printQty > $remainingQty) {
-        if (empty($adminMsnv) || empty($adminPass)) {
+        if (empty($adminMsnv) || empty($adminPass) || empty($overrideReason)) {
             $pdo->rollBack();
             echo json_encode([
                 'success' => false,
@@ -112,7 +117,7 @@ try {
                 'remaining_qty' => $remainingQty,
                 'print_qty' => $printQty,
                 'excess_qty' => ($printQty - $remainingQty),
-                'message' => "CẢNH BÁO VƯỢT ĐỊNH MỨC: Số lượng in ({$printQty}) vượt quá số lượng còn lại ({$remainingQty})! Bắt buộc phải có Quản lý / Admin / Editor xác nhận bằng MSNV và Mật khẩu."
+                'message' => "CẢNH BÁO VƯỢT ĐỊNH MỨC: Số lượng in ({$printQty}) vượt quá số lượng còn lại ({$remainingQty})! Bắt buộc phải nhập MSNV, Mật khẩu người duyệt và Lý do in vượt."
             ]);
             exit;
         }
@@ -136,6 +141,8 @@ try {
         $isOverTarget   = 1;
         $approvedByMsnv = $managerInfo['employee_code'];
         $approvedById   = (int)$managerInfo['id'];
+        $excessQty      = $printQty - $remainingQty;
+        $savedOverrideReason = "Lý do: {$overrideReason} | Nội dung: In {$printQty} con / Còn lại {$remainingQty} con (Vượt +{$excessQty} con) | Người duyệt: {$managerInfo['full_name']} ({$approvedByMsnv})";
     }
 
     // TÍNH TOÁN SỐ THÙNG VÀ KIỂM TRA THÙNG LẺ
@@ -182,13 +189,17 @@ try {
 
     // LƯU LỊCH SỬ IN (PRINT_HISTORY)
     $auditNote = !empty($note) ? ($note . " | [Thùng loại {$boxType}] [Trạng thái: Đã gửi lệnh in (Printed)]") : "[Thùng loại {$boxType}] [Trạng thái: Đã gửi lệnh in (Printed)]";
+    if ($isOverTarget && !empty($overrideReason)) {
+        $auditNote = "[Vượt mức - Lý do: {$overrideReason}] " . $auditNote;
+    }
+    $auditNote = mb_substr($auditNote, 0, 250, 'UTF-8');
 
     $stmtHist = $pdo->prepare("INSERT INTO `print_history` 
         (`order_id`, `slip_code`, `order_code`, `product_code`, `box_type`, `print_qty`, `pack_qty`, 
          `box_count`, `is_odd_box`, `odd_qty`, `box_numbers`, `qr_data_sample`, 
-         `is_over_target`, `approved_by_id`, `approved_by_msnv`, `operator_id`, `operator_name`, 
+         `is_over_target`, `approved_by_id`, `approved_by_msnv`, `override_reason`, `operator_id`, `operator_name`, 
          `operator_msnv`, `printer_destination`, `note`, `created_at`) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
 
     $stmtHist->execute([
         $orderId,
@@ -206,6 +217,7 @@ try {
         $isOverTarget,
         $approvedById,
         $approvedByMsnv,
+        $savedOverrideReason,
         $currentUser['id'],
         $currentUser['full_name'],
         $currentUser['employee_code'],

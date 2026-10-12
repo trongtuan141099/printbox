@@ -219,11 +219,86 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // =======================================================
-// 3.5. XỬ LÝ XÓA CHỈ THỊ SẢN XUẤT (DELETE ORDER - Editor & Admin)
+// 3.2. XỬ LÝ TẠM DỪNG IN HÀNG LOẠT (BATCH PAUSE - Editor & Admin)
+// =======================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'batch_pause') {
+    if (!canManageDirectives()) {
+        setFlash('danger', 'Bạn không có quyền tạm dừng chỉ thị sản xuất!');
+        header("Location: orders.php");
+        exit;
+    }
+
+    $orderIds = $_POST['order_ids'] ?? [];
+    if (is_string($orderIds)) {
+        $orderIds = array_filter(array_map('intval', explode(',', $orderIds)));
+    } elseif (is_array($orderIds)) {
+        $orderIds = array_filter(array_map('intval', $orderIds));
+    } else {
+        $orderIds = [];
+    }
+
+    if (!empty($orderIds)) {
+        try {
+            $placeholders = implode(',', array_fill(0, count($orderIds), '?'));
+            $stmtBatch = $pdo->prepare("UPDATE `production_orders` SET `status` = 'paused', `updated_at` = NOW() WHERE `id` IN ({$placeholders}) AND `status` != 'paused'");
+            $stmtBatch->execute(array_values($orderIds));
+            $affected = $stmtBatch->rowCount();
+            setFlash('warning', "Đã TẠM DỪNG in tem thành công cho {$affected} chỉ thị sản xuất đã chọn!");
+        } catch (PDOException $e) {
+            setFlash('danger', 'Lỗi CSDL khi tạm dừng hàng loạt: ' . $e->getMessage());
+        }
+    } else {
+        setFlash('warning', 'Vui lòng chọn ít nhất 1 chỉ thị sản xuất để tạm dừng!');
+    }
+
+    header("Location: orders.php");
+    exit;
+}
+
+// =======================================================
+// 3.3. XỬ LÝ LƯU / LÀM MỚI MÁY IN TEM MẶC ĐỊNH (AJAX JSON)
+// =======================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && in_array($_POST['action'], ['save_default_printer', 'refresh_printers'], true)) {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    header('Content-Type: application/json; charset=utf-8');
+
+    if ($_POST['action'] === 'refresh_printers') {
+        $printers = getConnectedPrinters(true);
+        $defPrinter = getDefaultPrinter($pdo, true);
+        echo json_encode([
+            'success'         => true,
+            'printers'        => array_values($printers),
+            'default_printer' => $defPrinter
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $printerName = trim($_POST['printer_name'] ?? '');
+    if (empty($printerName)) {
+        echo json_encode([
+            'success' => false,
+            'message' => 'Vui lòng chọn máy in tem hợp lệ!'
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    saveDefaultPrinter($printerName, $pdo);
+    echo json_encode([
+        'success'         => true,
+        'default_printer' => $printerName,
+        'message'         => "Đã lưu máy in mặc định: {$printerName}"
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// =======================================================
+// 3.5. XỬ LÝ XÓA CHỈ THỊ SẢN XUẤT (DELETE ORDER - CHỈ ADMIN)
 // =======================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete_order') {
-    if (!canManageDirectives()) {
-        setFlash('danger', 'LỖI PHÂN QUYỀN: Bạn không có quyền xóa chỉ thị sản xuất!');
+    if (!isAdmin()) {
+        setFlash('danger', 'LỖI PHÂN QUYỀN: Chỉ tài khoản Admin mới có quyền xóa chỉ thị sản xuất!');
         header("Location: orders.php");
         exit;
     }
@@ -460,8 +535,17 @@ $searchKeyword = trim($_GET['k'] ?? '');
 $filterStatus  = trim($_GET['status'] ?? '');
 $filterMonth   = trim($_GET['month'] ?? '');
 
+// Màn hình chỉ thị sản xuất (Viewer): Chỉ hiển thị các chỉ thị ở trạng thái được phép in; ẩn hoàn toàn chỉ thị đã tạm dừng in
+if (isViewer() && $filterStatus === 'paused') {
+    $filterStatus = '';
+}
+
 $whereSql = " WHERE 1=1";
 $params   = [];
+
+if (isViewer()) {
+    $whereSql .= " AND po.`status` != 'paused'";
+}
 
 if (!empty($searchKeyword)) {
     $whereSql .= " AND (po.`slip_code` LIKE ? OR po.`order_code` LIKE ? OR po.`product_code` LIKE ? OR po.`supplier` LIKE ?)";
@@ -501,6 +585,34 @@ if ($page > $totalPages) {
 $offset = ($page - 1) * $limit;
 
 // 3. Truy vấn danh sách chỉ thị theo trang với LIMIT và OFFSET
+// Thứ tự sắp xếp ưu tiên:
+// - Hoàn thành (completed) luôn được đẩy xuống vị trí cuối cùng của bảng
+// - Ưu tiên 1 (Theo thời gian): Tháng phát hành mới nhất (issue_month gần nhất) lên trên cùng
+// - Ưu tiên 2 (Theo trạng thái): Đang in (in_progress) -> Chờ in (pending) -> Tạm dừng (paused) -> Hoàn thành (completed)
+$orderBySql = " ORDER BY 
+    CASE WHEN po.`status` = 'completed' THEN 1 ELSE 0 END ASC,
+    COALESCE(
+        STR_TO_DATE(TRIM(po.`issue_month`), '%d/%m/%Y'),
+        STR_TO_DATE(TRIM(po.`issue_month`), '%Y-%m-%d'),
+        STR_TO_DATE(TRIM(po.`issue_month`), '%Y/%m/%d'),
+        STR_TO_DATE(CONCAT('01/', TRIM(po.`issue_month`)), '%d/%m/%Y'),
+        STR_TO_DATE(CONCAT('01-', TRIM(po.`issue_month`)), '%d-%m-%Y'),
+        STR_TO_DATE(CONCAT('01-', TRIM(po.`issue_month`)), '%d-%b-%Y'),
+        STR_TO_DATE(CONCAT('01/', TRIM(po.`issue_month`)), '%d/%b/%Y'),
+        STR_TO_DATE(CONCAT(TRIM(po.`issue_month`), '-01'), '%Y-%m-%d'),
+        STR_TO_DATE(CONCAT(TRIM(po.`issue_month`), '/01'), '%Y/%m/%d'),
+        DATE(po.`created_at`)
+    ) DESC,
+    CASE po.`status`
+        WHEN 'in_progress' THEN 1
+        WHEN 'pending'     THEN 2
+        WHEN 'paused'      THEN 3
+        WHEN 'completed'   THEN 4
+        ELSE 5
+    END ASC,
+    po.`created_at` DESC,
+    po.`id` DESC";
+
 $sql = "SELECT po.*, 
                COALESCE(ps.pack_qty, po.pack_qty) AS pack_qty,
                COALESCE(ps.supplier, po.supplier) AS supplier,
@@ -510,7 +622,8 @@ $sql = "SELECT po.*,
         FROM `production_orders` po 
         LEFT JOIN `product_specs` ps ON po.`product_code` = ps.`product_code` AND po.`box_type` = ps.`box_type` "
         . $whereSql
-        . " ORDER BY po.`id` DESC LIMIT {$limit} OFFSET {$offset}";
+        . $orderBySql
+        . " LIMIT {$limit} OFFSET {$offset}";
 
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
@@ -532,6 +645,10 @@ function buildOrderPageUrl($pageNumber, $customParams = []) {
 // Lấy danh mục Specs để phục vụ Auto-complete / Datalist và tra cứu đổi loại thùng
 $allSpecs = $pdo->query("SELECT product_code, box_type, pack_qty, supplier, weight_per_box, unit FROM `product_specs` ORDER BY `product_code` ASC, `box_type` ASC")->fetchAll();
 
+// Lấy danh sách máy in thực tế đang kết nối và máy in mặc định
+$connectedPrinters = getConnectedPrinters();
+$defaultPrinter    = getDefaultPrinter($pdo);
+
 // Tham số xuất Excel
 $exportParams = http_build_query([
     'type'   => 'orders',
@@ -550,6 +667,11 @@ $exportParams = http_build_query([
         <button type="button" class="btn btn-primary" onclick="openOffcanvasPrint(null)">
             🏷️ Quét / In Tem Thùng
         </button>
+
+        <!-- NÚT CẤU HÌNH MÁY IN TEM MẶC ĐỊNH -->
+        <!-- <button type="button" class="btn btn-outline-dark" onclick="openModal('modal_printer_config')" title="Cấu hình máy in tem mặc định kết nối với máy tính">
+            🖨️ Máy In: <strong id="header_default_printer_label"><?= htmlspecialchars($defaultPrinter ?: 'Chưa chọn') ?></strong>
+        </button> -->
 
         <?php if (canManageDirectives()): ?>
             <button type="button" class="btn btn-outline-primary" onclick="openModal('modal_add_order')">
@@ -580,7 +702,9 @@ $exportParams = http_build_query([
                     <option value="">-- Tất cả trạng thái --</option>
                     <option value="pending" <?= ($filterStatus === 'pending') ? 'selected' : '' ?>>Chờ in (Pending)</option>
                     <option value="in_progress" <?= ($filterStatus === 'in_progress') ? 'selected' : '' ?>>Đang in (In Progress)</option>
-                    <option value="paused" <?= ($filterStatus === 'paused') ? 'selected' : '' ?>>⏸️ Tạm dừng in (Paused)</option>
+                    <?php if (!isViewer()): ?>
+                        <option value="paused" <?= ($filterStatus === 'paused') ? 'selected' : '' ?>>⏸️ Tạm dừng in (Paused)</option>
+                    <?php endif; ?>
                     <option value="completed" <?= ($filterStatus === 'completed') ? 'selected' : '' ?>>Hoàn thành (Completed)</option>
                 </select>
             </div>
@@ -599,17 +723,36 @@ $exportParams = http_build_query([
 
 <!-- BẢNG DANH SÁCH CHỈ THỊ SẢN XUẤT -->
 <div class="card shadow-sm">
-    <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
-        <span class="card-title fw-bold text-dark m-0">
-            Danh Sách Chỉ Thị Sản Xuất <span class="badge bg-secondary ms-1"><?= number_format($totalRecords) ?> chỉ thị</span>
-        </span>
-        <span class="text-muted small">Nhấn <strong>"🏷️ In Tem"</strong> trên từng dòng để mở form in trượt tiện lợi</span>
+    <div class="card-header bg-white py-2 px-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <span class="card-title fw-bold text-dark m-0">
+                Danh Sách Chỉ Thị Sản Xuất <span class="badge bg-secondary ms-1"><?= number_format($totalRecords) ?> chỉ thị</span>
+            </span>
+            <?php if (canManageDirectives()): ?>
+                <div class="d-inline-flex flex-wrap align-items-center gap-1 ms-md-2">
+                    <button type="button" id="btn_batch_pause_selected" class="btn btn-sm btn-warning fw-bold" onclick="executeBatchPauseSelected()" disabled>
+                        ⏸️ Tạm dừng in đã chọn (<span id="selected_orders_count">0</span>)
+                    </button>
+                    <?php if ($totalRecords > 0 && $filterStatus !== 'paused'): ?>
+                        <button type="button" id="btn_batch_pause_filtered" class="btn btn-sm btn-outline-warning text-dark fw-bold" onclick="executeBatchPauseFiltered()">
+                            ⏸️ Tạm dừng tất cả theo bộ lọc (<?= number_format($totalRecords) ?>)
+                        </button>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <span class="text-muted small">Nhấn <strong>"🏷️ In"</strong> trên từng dòng để mở form in trượt tiện lợi</span>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive table-sticky-container">
             <table class="table table-hover align-middle mb-0 table-sticky" id="orders_table">
                 <thead class="table-light table-sticky-header">
                     <tr>
+                        <?php if (canManageDirectives()): ?>
+                        <th style="width:42px;" class="text-center">
+                            <input type="checkbox" class="form-check-input" id="chk_select_all_orders" title="Chọn tất cả chỉ thị được phép tạm dừng trên trang này">
+                        </th>
+                        <?php endif; ?>
                         <th style="width:50px;" class="text-center">STT</th>
                         <th style="width:50px;" class="text-center">Mã Phiếu</th>
                         <th>Mã Chỉ Thị</th>
@@ -627,7 +770,7 @@ $exportParams = http_build_query([
                 <tbody>
                     <?php if (empty($orders)): ?>
                         <tr>
-                            <td colspan="12" class="text-center py-4 text-muted">
+                            <td colspan="<?= canManageDirectives() ? 13 : 12 ?>" class="text-center py-4 text-muted">
                                 Không tìm thấy chỉ thị nào phù hợp.
                             </td>
                         </tr>
@@ -653,6 +796,15 @@ $exportParams = http_build_query([
                             }
                         ?>
                         <tr id="row_order_<?= $row['id'] ?>" class="<?= $isPaused ? 'table-warning' : '' ?>">
+                            <?php if (canManageDirectives()): ?>
+                            <td class="text-center">
+                                <input type="checkbox" class="form-check-input order-row-checkbox" 
+                                       value="<?= (int)$row['id'] ?>" 
+                                       data-slip="<?= htmlspecialchars($row['slip_code']) ?>"
+                                       data-status="<?= htmlspecialchars($row['status']) ?>"
+                                       <?= $isPaused ? 'disabled title="Chỉ thị đã ở trạng thái tạm dừng"' : 'title="Chọn chỉ thị để tạm dừng hàng loạt"' ?>>
+                            </td>
+                            <?php endif; ?>
                             <td class="text-center text-muted"><?= $fromRecord + $idx ?></td>
                             <td>
                                 <strong class="text-primary text-break"><?= htmlspecialchars($row['slip_code']) ?></strong>
@@ -702,7 +854,7 @@ $exportParams = http_build_query([
                                         🏷️ In
                                     </button>
 
-                                    <!-- NÚT 2, 3 & 4: CHỈNH SỬA, TẠM DỪNG & XÓA (CHỈ DÀNH CHO EDITOR & ADMIN) -->
+                                    <!-- NÚT 2 & 3: CHỈNH SỬA & TẠM DỪNG (DÀNH CHO EDITOR & ADMIN) -->
                                     <?php if (canManageDirectives()): ?>
                                         <button type="button" class="btn btn-sm btn-outline-secondary" 
                                                 onclick="openEditModalById(<?= (int)$row['id'] ?>)" 
@@ -723,11 +875,13 @@ $exportParams = http_build_query([
                                                 ⏸️ Dừng
                                             </button>
                                         <?php endif; ?>
+                                    <?php endif; ?>
 
-                                        <!-- NÚT 4: XÓA CHỈ THỊ SẢN XUẤT (EDITOR & ADMIN) -->
+                                    <!-- NÚT 4: XÓA CHỈ THỊ SẢN XUẤT (CHỈ DÀNH CHO ADMIN) -->
+                                    <?php if (isAdmin()): ?>
                                         <button type="button" class="btn btn-sm btn-outline-danger" 
                                                 onclick="requestDeleteOrder(<?= (int)$row['id'] ?>, '<?= htmlspecialchars(addslashes($row['slip_code']), ENT_QUOTES, 'UTF-8') ?>', '<?= htmlspecialchars(addslashes($row['order_code']), ENT_QUOTES, 'UTF-8') ?>')" 
-                                                title="Xóa chỉ thị sản xuất này">
+                                                title="Xóa chỉ thị sản xuất này (Chỉ Admin)">
                                             🗑️
                                         </button>
                                     <?php endif; ?>
@@ -952,20 +1106,34 @@ $exportParams = http_build_query([
                 <div class="fw-bold">⚠️ CẢNH BÁO VƯỢT ĐỊNH MỨC CÒN LẠI!</div>
                 <div class="small">
                     Số lượng in (<span id="oc_txt_excess_print">0</span>) vượt quá số còn lại (<span id="oc_txt_excess_rem">0</span>)!<br>
-                    Cần Quản lý/Admin nhập <strong>Mã số nhân viên (MSNV)</strong> để duyệt.
+                    Cần Quản lý/Admin nhập <strong>Mã số nhân viên (MSNV)</strong>, <strong>Mật khẩu</strong> và <strong>Lý do in vượt</strong> để duyệt.
                 </div>
             </div>
 
             <div class="mb-3">
-                <label class="form-label fw-bold">Máy In Tem Sử Dụng</label>
-                <select id="offcanvas_printer_select" class="form-select">
-                    <option value="ZDesigner / Zebra (65x30mm)">ZDesigner / Zebra (65x30mm)</option>
-                    <option value="Godex Industrial (65x30mm)">Godex Industrial (65x30mm)</option>
-                    <option value="Xprinter Barcode (65x30mm)">Xprinter Barcode (65x30mm)</option>
-                    <option value="Sato Label Printer (65x30mm)">Sato Label Printer (65x30mm)</option>
-                    <option value="Standard Label Printer (65x30mm)">Máy in tem mặc định (65x30mm)</option>
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <label class="form-label fw-bold mb-0">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
+                    <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="refreshConnectedPrinters()" title="Quét lại danh sách máy in đang kết nối">
+                        🔄 Làm mới máy in
+                    </button>
+                </div>
+                <select id="offcanvas_printer_select" class="form-select border-primary fw-bold" onchange="onDefaultPrinterChange(this.value)">
+                    <?php if (empty($connectedPrinters)): ?>
+                        <option value="<?= htmlspecialchars($defaultPrinter ?: 'Standard Label Printer (65x30mm)') ?>"><?= htmlspecialchars($defaultPrinter ?: 'Máy in tem mặc định (65x30mm)') ?></option>
+                    <?php else: ?>
+                        <?php foreach ($connectedPrinters as $p): 
+                            $pName = is_array($p) ? ($p['name'] ?? '') : (string)$p;
+                            if ($pName === '') continue;
+                        ?>
+                            <option value="<?= htmlspecialchars($pName) ?>" <?= ($pName === $defaultPrinter) ? 'selected' : '' ?>>
+                                🖨️ <?= htmlspecialchars($pName) ?><?= (is_array($p) && !empty($p['default'])) ? ' (Mặc định hệ điều hành)' : '' ?>
+                            </option>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
                 </select>
-                <small class="text-muted">Định dạng nhiệt chuẩn 65mm &times; 30mm tương thích công nghiệp.</small>
+                <small class="text-muted d-block mt-1">
+                    Chỉ hiển thị các máy in đang kết nối thực tế với máy tính. Lựa chọn sẽ tự động lưu làm <strong>mặc định</strong> cho những lần in tiếp theo.
+                </small>
             </div>
 
             <div class="mb-3">
@@ -1023,8 +1191,8 @@ $exportParams = http_build_query([
                     <td id="cf_box_count" class="fw-bold text-success fs-5">-</td>
                 </tr>
                 <tr>
-                    <td class="fw-bold bg-light">Máy in chỉ định:</td>
-                    <td id="cf_printer_name" class="fw-bold text-dark">-</td>
+                    <td class="fw-bold bg-light">Máy in mặc định:</td>
+                    <td id="cf_printer_name" class="fw-bold text-primary">-</td>
                 </tr>
                 <tr id="cf_row_odd" style="display:none;" class="table-warning">
                     <td class="fw-bold text-warning">Chi tiết thùng lẻ:</td>
@@ -1037,7 +1205,7 @@ $exportParams = http_build_query([
             </table>
 
             <small class="text-muted d-block">
-                Sau khi xác nhận, hệ thống tự động sinh các mã thùng tuần tự <code class="text-primary">TU-<?= date('ymd') ?>-XXX</code> và hiển thị tem in 65x30mm kèm mã QR.
+                Sau khi xác nhận, hệ thống tự động sinh các mã thùng tuần tự <code class="text-primary">TU-<?= date('ymd') ?>-XXX</code>, hiển thị tem 65x30mm kèm mã QR và gửi lệnh in trực tiếp đến máy in mặc định.
             </small>
         </div>
         <div class="modal-footer">
@@ -1050,10 +1218,10 @@ $exportParams = http_build_query([
 </div>
 
 <!-- =======================================================
-     MODAL 2: DUYỆT VƯỢT ĐỊNH MỨC DÀNH CHO ADMIN / EDITOR (MSNV & PASSWORD)
+     MODAL 2: DUYỆT VƯỢT ĐỊNH MỨC DÀNH CHO ADMIN / EDITOR (MSNV, PASSWORD & LÝ DO)
      ======================================================= -->
 <div id="modal_admin_approval" class="modal-overlay" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="modal_approval_title">
-    <div class="modal-dialog" style="max-width: 520px;">
+    <div class="modal-dialog" style="max-width: 540px;">
         <form id="form_admin_approval" autocomplete="off" onsubmit="return false;" novalidate>
             <div class="modal-header bg-danger text-white">
                 <span class="modal-title fw-bold" id="modal_approval_title">🛡️ Yêu Cầu Ủy Quyền Duyệt Vượt Định Mức</span>
@@ -1066,7 +1234,7 @@ $exportParams = http_build_query([
                 </div>
 
                 <p class="fw-bold text-dark mb-2">
-                    Bắt buộc Quản lý / Admin / Editor nhập Mã số nhân viên (MSNV) và Mật khẩu để xác nhận ủy quyền:
+                    Bắt buộc Quản lý / Admin / Editor nhập Mã số nhân viên (MSNV), Mật khẩu và Lý do in vượt để xác nhận ủy quyền:
                 </p>
 
                 <div class="mb-3">
@@ -1087,12 +1255,20 @@ $exportParams = http_build_query([
                             👁️
                         </button>
                     </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="input_override_reason" class="form-label required fw-bold">Lý do in vượt định mức</label>
+                    <textarea id="input_override_reason" name="override_reason" class="form-control" rows="2"
+                              placeholder="Nhập rõ lý do in vượt định mức (bắt buộc, vd: In bù hàng NG, thay thế tem hỏng, bổ sung theo yêu cầu)..."
+                              tabindex="3" required></textarea>
+                    <small class="text-muted">Thông tin MSNV, thời gian, nội dung và lý do vượt định mức sẽ được lưu vào Lịch sử in.</small>
                     <div id="admin_verify_feedback" class="mt-2 small fw-bold"></div>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" onclick="closeModal('modal_admin_approval')">Hủy bỏ</button>
-                <button type="submit" id="btn_verify_and_proceed" class="btn btn-danger fw-bold" tabindex="3">
+                <button type="submit" id="btn_verify_and_proceed" class="btn btn-danger fw-bold" tabindex="4">
                     🔑 Xác nhận duyệt vượt mức
                 </button>
             </div>
@@ -1110,14 +1286,14 @@ $exportParams = http_build_query([
                 <span class="fs-5">🏷️</span>
                 <span class="modal-title fw-bold text-dark">Xem Trước &amp; In Tem QR (65mm &times; 30mm)</span>
             </div>
-            <button type="button" class="modal-close" onclick="closeModal('modal_print_result')">&times;</button>
+            <button type="button" class="modal-close" onclick="closeModal('modal_print_result')" title="Thoát">&times;</button>
         </div>
         <div class="modal-body p-3">
             <!-- THANH THÔNG TIN PREVIEW TINH GỌN (CHỈ HIỆN TRÊN MÀN HÌNH, ẨN HOÀN TOÀN KHI IN) -->
             <div class="no-print d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-2 bg-light border rounded">
                 <div class="small">
                     <strong>Số tem:</strong> <span id="res_box_count" class="badge bg-success fs-6">0</span> tem | 
-                    <strong>Máy in:</strong> <span id="res_printer_name" class="text-primary fw-bold">ZDesigner / Zebra (65x30mm)</span>
+                    <strong>Máy in mặc định:</strong> <span id="res_printer_name" class="text-primary fw-bold"><?= htmlspecialchars($defaultPrinter ?: 'Máy in tem mặc định') ?></span>
                 </div>
                 <div class="d-flex gap-2">
                     <button type="button" class="btn btn-secondary btn-sm" onclick="closeModal('modal_print_result')">Đóng</button>
@@ -1131,9 +1307,9 @@ $exportParams = http_build_query([
             </div>
         </div>
         <div class="modal-footer no-print py-2">
-            <span class="text-muted small me-auto">💡 Tự động kích hoạt máy in. Khổ tem 65mm &times; 30mm, 1 tem = 1 trang.</span>
+            <span class="text-muted small me-auto">💡 Đã tự động gửi lệnh đến máy in mặc định. Khổ tem 65mm &times; 30mm, 1 tem = 1 trang.</span>
             <button type="button" class="btn btn-secondary" onclick="closeModal('modal_print_result')">Đóng</button>
-            <button type="button" class="btn btn-primary fw-bold" onclick="triggerDirectPrint()">🖨️ In Lại</button>
+            <button type="button" class="btn btn-primary fw-bold" onclick="triggerDirectPrint()">🖨️ Gửi Lệnh In</button>
         </div>
     </div>
 </div>
@@ -1320,7 +1496,7 @@ $exportParams = http_build_query([
                 </div>
 
                 <div class="mb-3">
-                    <a href="export.php?type=sample_orders" download="sample_orders.csv" class="btn btn-sm btn-outline-primary">
+                    <a href="export.php?type=sample_orders" class="btn btn-sm btn-outline-primary">
                         📥 Tải File Mẫu (sample_orders.csv)
                     </a>
                 </div>
@@ -1366,9 +1542,9 @@ $exportParams = http_build_query([
 </div>
 
 <!-- =======================================================
-     MODAL 8: XÁC NHẬN XÓA CHỈ THỊ SẢN XUẤT (EDITOR & ADMIN)
+     MODAL 8: XÁC NHẬN XÓA CHỈ THỊ SẢN XUẤT (CHỈ DÀNH CHO ADMIN)
      ======================================================= -->
-<?php if (canManageDirectives()): ?>
+<?php if (isAdmin()): ?>
 <div id="modal_confirm_delete_order" class="modal-overlay">
     <div class="modal-dialog" style="max-width: 480px;">
         <form method="POST" action="orders.php" id="form_delete_order">
@@ -1376,7 +1552,7 @@ $exportParams = http_build_query([
             <input type="hidden" name="order_id" id="delete_order_id">
             
             <div class="modal-header bg-danger text-white">
-                <span class="modal-title fw-bold">🗑️ Xác Nhận Xóa Chỉ Thị Sản Xuất</span>
+                <span class="modal-title fw-bold">🗑️ Xác Nhận Xóa Chỉ Thị Sản Xuất (Admin)</span>
                 <button type="button" class="modal-close text-white" onclick="closeModal('modal_confirm_delete_order')">&times;</button>
             </div>
             <div class="modal-body">
@@ -1411,6 +1587,54 @@ $exportParams = http_build_query([
 </div>
 <?php endif; ?>
 
+<!-- =======================================================
+     MODAL 9: CẤU HÌNH MÁY IN TEM SỬ DỤNG MẶC ĐỊNH
+     ======================================================= -->
+<div id="modal_printer_config" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 520px;">
+        <div class="modal-header bg-dark text-white">
+            <span class="modal-title fw-bold">🖨️ Cấu Hình Máy In Tem Sử Dụng Mặc Định</span>
+            <button type="button" class="modal-close text-white" onclick="closeModal('modal_printer_config')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="alert alert-info py-2 px-3 mb-3 small">
+                Hệ thống tự động lọc và chỉ hiển thị danh sách các máy in <strong>đang kết nối thực tế</strong> với máy tính hiện tại.
+                Lựa chọn của bạn sẽ được lưu làm <strong>mặc định</strong> cho tất cả các lần in sau.
+            </div>
+
+            <div class="mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <label class="form-label fw-bold mb-0">Chọn Máy In Tem Mặc Định:</label>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshConnectedPrinters()">
+                        🔄 Quét lại máy in
+                    </button>
+                </div>
+                <select id="modal_printer_select" class="form-select form-select-lg fw-bold border-primary">
+                    <?php if (empty($connectedPrinters)): ?>
+                        <option value="<?= htmlspecialchars($defaultPrinter ?: 'Standard Label Printer (65x30mm)') ?>"><?= htmlspecialchars($defaultPrinter ?: 'Máy in tem mặc định (65x30mm)') ?></option>
+                    <?php else: ?>
+                        <?php foreach ($connectedPrinters as $p): 
+                            $pName = is_array($p) ? ($p['name'] ?? '') : (string)$p;
+                            if ($pName === '') continue;
+                        ?>
+                            <option value="<?= htmlspecialchars($pName) ?>" <?= ($pName === $defaultPrinter) ? 'selected' : '' ?>>
+                                🖨️ <?= htmlspecialchars($pName) ?><?= (is_array($p) && !empty($p['default'])) ? ' (Mặc định hệ điều hành)' : '' ?>
+                            </option>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </select>
+                <div id="printer_config_feedback" class="mt-2 small fw-bold"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('modal_printer_config')">Đóng</button>
+            <button type="button" class="btn btn-primary fw-bold" id="btn_save_printer_config" onclick="savePrinterFromModal()">
+                💾 Lưu Làm Máy In Mặc Định
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
 // =======================================================
 // DỮ LIỆU ĐỒNG BỘ TOÀN CỤC & BIẾN TRẠNG THÁI
@@ -1438,10 +1662,11 @@ allSpecsList.forEach(item => {
     }
 });
 
-let currentOrder        = null;
-let currentCalculation  = null;
-let verifiedAdminMsnv   = null;
-let verifiedAdminPass   = null;
+let currentOrder           = null;
+let currentCalculation     = null;
+let verifiedAdminMsnv      = null;
+let verifiedAdminPass      = null;
+let verifiedOverrideReason = null;
 
 // =======================================================
 // HÀM MỞ / ĐÓNG MODAL TIỆN ÍCH CHUẨN XÁC, KHÔNG BAO GIỜ BỊ ĐƠ
@@ -1479,9 +1704,17 @@ function openModal(id) {
     }, 100);
 }
 
-function closeModal(id) { 
+function closeModal(id, forceClose = false) { 
     const el = document.getElementById(id);
     if (!el) return;
+
+    // Cảnh báo khi thoát Modal Preview Tem QR (sau khi bấm Đồng ý nhập và In ngay)
+    if (id === 'modal_print_result' && el.classList.contains('active') && !forceClose) {
+        if (!window.confirm('Bạn có chắc chắn đã in rồi hay không?')) {
+            return;
+        }
+    }
+
     el.classList.remove('active');
     if (!document.querySelector('.modal-overlay.active')) {
         document.body.classList.remove('modal-open');
@@ -1521,6 +1754,150 @@ if (offcanvasPrintElement) {
         }
     });
 }
+
+// =======================================================
+// CẤU HÌNH & TỰ ĐỘNG HÓA MÁY IN TEM SỬ DỤNG MẶC ĐỊNH
+// =======================================================
+function syncPrinterSelectUI(printerName) {
+    if (!printerName) return;
+    const ocSelect = document.getElementById('offcanvas_printer_select');
+    if (ocSelect) {
+        for (let i = 0; i < ocSelect.options.length; i++) {
+            if (ocSelect.options[i].value === printerName) {
+                ocSelect.value = printerName;
+                break;
+            }
+        }
+    }
+    const mdSelect = document.getElementById('modal_printer_select');
+    if (mdSelect) {
+        for (let i = 0; i < mdSelect.options.length; i++) {
+            if (mdSelect.options[i].value === printerName) {
+                mdSelect.value = printerName;
+                break;
+            }
+        }
+    }
+    const headerLabel = document.getElementById('header_default_printer_label');
+    if (headerLabel) headerLabel.innerText = printerName;
+    const resPrinterEl = document.getElementById('res_printer_name');
+    if (resPrinterEl) resPrinterEl.innerText = printerName;
+}
+
+function onDefaultPrinterChange(printerName, showFeedback = false) {
+    if (!printerName) return;
+    try {
+        localStorage.setItem('printbox_default_printer', printerName);
+        localStorage.setItem('mes_default_printer', printerName);
+    } catch (e) {}
+    syncPrinterSelectUI(printerName);
+
+    const fd = new FormData();
+    fd.append('action', 'save_default_printer');
+    fd.append('printer_name', printerName);
+
+    fetch('orders.php', {
+        method: 'POST',
+        body: fd
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (showFeedback) {
+            const fb = document.getElementById('printer_config_feedback');
+            if (fb) {
+                fb.style.color = data.success ? '#15803d' : '#b91c1c';
+                fb.innerText = data.success ? ('✓ ' + data.message) : ('✗ ' + data.message);
+            }
+        }
+    })
+    .catch(err => console.warn('Không thể lưu máy in mặc định:', err));
+}
+
+function savePrinterFromModal() {
+    const mdSelect = document.getElementById('modal_printer_select');
+    if (!mdSelect || !mdSelect.value) return;
+    const selected = mdSelect.value;
+    onDefaultPrinterChange(selected, true);
+    setTimeout(() => {
+        closeModal('modal_printer_config');
+    }, 350);
+}
+
+function refreshConnectedPrinters() {
+    const fb = document.getElementById('printer_config_feedback');
+    if (fb) {
+        fb.style.color = '#2563eb';
+        fb.innerText = '⏳ Đang quét các máy in kết nối thực tế với máy tính...';
+    }
+
+    const fd = new FormData();
+    fd.append('action', 'refresh_printers');
+
+    fetch('orders.php', {
+        method: 'POST',
+        body: fd
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (!data.success) return;
+        const rawPrinters = Array.isArray(data.printers) ? data.printers : [];
+        const printerNames = rawPrinters.map(p => (typeof p === 'object' && p !== null) ? (p.name || '') : String(p)).filter(Boolean);
+        const savedLocal = (() => { try { return localStorage.getItem('printbox_default_printer') || localStorage.getItem('mes_default_printer'); } catch(e) { return null; } })();
+        const activeDef = (savedLocal && printerNames.includes(savedLocal)) ? savedLocal : (data.default_printer || (printerNames[0] || 'Standard Label Printer (65x30mm)'));
+
+        ['offcanvas_printer_select', 'modal_printer_select'].forEach(selId => {
+            const sel = document.getElementById(selId);
+            if (!sel) return;
+            sel.innerHTML = '';
+            if (rawPrinters.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = activeDef;
+                opt.textContent = activeDef;
+                sel.appendChild(opt);
+            } else {
+                rawPrinters.forEach(pObj => {
+                    const pName = (typeof pObj === 'object' && pObj !== null) ? (pObj.name || '') : String(pObj);
+                    if (!pName) return;
+                    const isOsDef = (typeof pObj === 'object' && pObj !== null && pObj.default);
+                    const opt = document.createElement('option');
+                    opt.value = pName;
+                    opt.textContent = '🖨️ ' + pName + (isOsDef ? ' (Mặc định hệ điều hành)' : '');
+                    if (pName === activeDef) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+            }
+        });
+
+        syncPrinterSelectUI(activeDef);
+        if (fb) {
+            fb.style.color = '#15803d';
+            fb.innerText = `✓ Đã cập nhật ${printerNames.length} máy in đang kết nối thực tế!`;
+        }
+    })
+    .catch(err => {
+        if (fb) {
+            fb.style.color = '#b91c1c';
+            fb.innerText = '✗ Lỗi làm mới danh sách máy in: ' + err.message;
+        }
+    });
+}
+
+// Khởi tạo đồng bộ máy in mặc định từ localStorage nếu khớp danh sách máy in đang kết nối
+(function initDefaultPrinterSync() {
+    try {
+        const savedPrinter = localStorage.getItem('printbox_default_printer') || localStorage.getItem('mes_default_printer');
+        const ocSelect = document.getElementById('offcanvas_printer_select');
+        if (savedPrinter && ocSelect) {
+            const exists = Array.from(ocSelect.options).some(opt => opt.value === savedPrinter);
+            if (exists && ocSelect.value !== savedPrinter) {
+                onDefaultPrinterChange(savedPrinter, false);
+            } else if (ocSelect.value) {
+                localStorage.setItem('printbox_default_printer', ocSelect.value);
+                localStorage.setItem('mes_default_printer', ocSelect.value);
+            }
+        }
+    } catch (e) {}
+})();
 
 // =======================================================
 // OFFCANVAS WORKFLOW: MỞ PANEL & TÍNH TOÁN TEM THÙNG
@@ -1587,6 +1964,7 @@ function resetOffcanvasState() {
     currentCalculation = null;
     verifiedAdminMsnv = null;
     verifiedAdminPass = null;
+    verifiedOverrideReason = null;
     document.getElementById('offcanvas_order_card').style.display = 'none';
     document.getElementById('offcanvas_print_inputs').style.display = 'none';
     document.getElementById('offcanvas_alert_paused').style.display = 'none';
@@ -1630,6 +2008,7 @@ function loadOrderIntoOffcanvas(order) {
     currentCalculation = null;
     verifiedAdminMsnv = null;
     verifiedAdminPass = null;
+    verifiedOverrideReason = null;
 
     document.getElementById('oc_disp_slip').innerText = currentOrder.slip_code;
     document.getElementById('oc_disp_order').innerText = currentOrder.order_code;
@@ -1775,12 +2154,12 @@ function recalculateOffcanvas() {
     if (!currentOrder) return;
 
     const printQtyVal = parseInt(document.getElementById('offcanvas_print_qty').value, 10);
-    // const packageSpec = parseInt(currentOrder.pack_qty, 10) || 1;
     const packageSpec = Number(currentOrder.pack_qty);
 
     // Reset xác thực vượt mức mỗi khi thay đổi số lượng in
     verifiedAdminMsnv = null;
     verifiedAdminPass = null;
+    verifiedOverrideReason = null;
 
     if (isNaN(printQtyVal) || printQtyVal <= 0) {
         document.getElementById('offcanvas_calc_panel').style.display = 'none';
@@ -1790,11 +2169,6 @@ function recalculateOffcanvas() {
         currentCalculation = null;
         return;
     }
-
-    // CÔNG THỨC:
-    // full_boxes = floor(printed_qty / package_spec)
-    // remainder  = printed_qty % package_spec
-
 
     const fullBoxes = Math.floor(printQtyVal / packageSpec);
     const remainder = printQtyVal % packageSpec;
@@ -1810,16 +2184,6 @@ function recalculateOffcanvas() {
         totalBoxes: totalBoxes
     };
 
-    console.log({
-    printQtyVal,
-    pack_qty: currentOrder.pack_qty,
-    box_type: currentOrder.box_type,
-    packageSpec,
-    remainder,
-    hasOdd
-    });
-
-
     document.getElementById('oc_calc_pack').innerText = packageSpec + ' con/thùng';
     document.getElementById('oc_calc_full_boxes').innerText = fullBoxes + ' thùng (' + (fullBoxes * packageSpec) + ' con)';
     
@@ -1828,12 +2192,10 @@ function recalculateOffcanvas() {
         document.getElementById('oc_row_calc_odd').style.display = 'none';
         document.getElementById('offcanvas_odd_option').style.display = 'none';
         document.getElementById('oc_chk_odd_box').checked = false;
-            // Reset dữ liệu cũ
-    document.getElementById('oc_calc_odd_qty').innerText = '';
-    document.getElementById('oc_odd_warning_text').innerText = '';
+        document.getElementById('oc_calc_odd_qty').innerText = '';
+        document.getElementById('oc_odd_warning_text').innerText = '';
     } else {
         // CONDITION 2: remainder > 0 -> Bắt buộc hiển thị cảnh báo & yêu cầu tick chọn in lẻ
-        // CHECKBOX RULE: Mặc định để trống/chưa tick, nhân viên phải chủ động tích chọn
         document.getElementById('oc_row_calc_odd').style.display = 'flex';
         document.getElementById('oc_calc_odd_qty').innerText = '1 thùng lẻ (' + remainder + ' con)';
         document.getElementById('oc_odd_warning_text').innerText = 'Dư ' + remainder + ' con lẻ (Quy cách ' + packageSpec + ' con/thùng).';
@@ -1852,8 +2214,6 @@ function recalculateOffcanvas() {
     } else {
         document.getElementById('offcanvas_alert_over').style.display = 'none';
     }
-
-
 }
 
 const inpPrintQty = document.getElementById('offcanvas_print_qty');
@@ -1879,14 +2239,15 @@ if (btnOffSubmit) {
         }
 
         // BẮT BUỘC KIỂM TRA VƯỢT ĐỊNH MỨC:
-        // Bất kể người dùng đang đăng nhập là Viewer, Editor hay Admin,
-        // khi printQty > remaining BẮT BUỘC PHẢI QUA BƯỚC XÁC THỰC MSNV & MẬT KHẨU!
-        if (printQty > remaining && (!verifiedAdminMsnv || !verifiedAdminPass)) {
+        // Khi printQty > remaining BẮT BUỘC PHẢI QUA BƯỚC XÁC THỰC MSNV, MẬT KHẨU & LÝ DO IN VƯỢT!
+        if (printQty > remaining && (!verifiedAdminMsnv || !verifiedAdminPass || !verifiedOverrideReason)) {
             document.getElementById('modal_req_qty').innerText = printQty.toLocaleString();
             document.getElementById('modal_rem_qty').innerText = remaining.toLocaleString();
             document.getElementById('modal_diff_qty').innerText = '+' + (printQty - remaining).toLocaleString() + ' con';
             document.getElementById('input_admin_msnv').value = '';
             document.getElementById('input_admin_pass').value = '';
+            const reasonEl = document.getElementById('input_override_reason');
+            if (reasonEl) reasonEl.value = '';
             document.getElementById('admin_verify_feedback').innerText = '';
             openModal('modal_admin_approval');
             return;
@@ -1894,7 +2255,7 @@ if (btnOffSubmit) {
 
         // Điền modal xác nhận nhà máy
         const printerSelect = document.getElementById('offcanvas_printer_select');
-        const selectedPrinter = printerSelect ? printerSelect.value : 'ZDesigner / Zebra (65x30mm)';
+        const selectedPrinter = printerSelect ? printerSelect.value : 'Standard Label Printer (65x30mm)';
         const cfPrinterEl = document.getElementById('cf_printer_name');
         if (cfPrinterEl) cfPrinterEl.innerText = selectedPrinter;
 
@@ -1918,7 +2279,7 @@ if (btnOffSubmit) {
 
         if (printQty > remaining) {
             document.getElementById('cf_row_over').style.display = 'table-row';
-            document.getElementById('cf_over_desc').innerText = 'Đã ủy quyền duyệt bởi: ' + verifiedAdminMsnv;
+            document.getElementById('cf_over_desc').innerText = 'Người duyệt: ' + verifiedAdminMsnv + ' | Lý do: ' + verifiedOverrideReason;
         } else {
             document.getElementById('cf_row_over').style.display = 'none';
         }
@@ -1927,15 +2288,17 @@ if (btnOffSubmit) {
     });
 }
 
-// XÁC THỰC MSNV & MẬT KHẨU ADMIN/EDITOR DUYỆT VƯỢT MỨC VÀ THỰC THI IN NGAY
+// XÁC THỰC MSNV, MẬT KHẨU & LÝ DO DUYỆT VƯỢT MỨC CỦA ADMIN/EDITOR VÀ THỰC THI IN NGAY
 function submitAdminApproval() {
-    const msnvInput = document.getElementById('input_admin_msnv');
-    const passInput = document.getElementById('input_admin_pass');
-    const fb = document.getElementById('admin_verify_feedback');
-    const btn = document.getElementById('btn_verify_and_proceed');
+    const msnvInput   = document.getElementById('input_admin_msnv');
+    const passInput   = document.getElementById('input_admin_pass');
+    const reasonInput = document.getElementById('input_override_reason');
+    const fb          = document.getElementById('admin_verify_feedback');
+    const btn         = document.getElementById('btn_verify_and_proceed');
 
-    const msnv = msnvInput ? msnvInput.value.trim() : '';
-    const pass = passInput ? passInput.value.trim() : '';
+    const msnv           = msnvInput ? msnvInput.value.trim() : '';
+    const pass           = passInput ? passInput.value.trim() : '';
+    const overrideReason = reasonInput ? reasonInput.value.trim() : '';
 
     if (!msnv) {
         if (fb) {
@@ -1961,6 +2324,17 @@ function submitAdminApproval() {
         return;
     }
 
+    if (!overrideReason) {
+        if (fb) {
+            fb.style.color = '#b91c1c';
+            fb.innerText = '✗ Vui lòng nhập Lý do in vượt định mức (bắt buộc)!';
+        }
+        if (reasonInput) {
+            reasonInput.focus();
+        }
+        return;
+    }
+
     if (!currentOrder || !currentCalculation) {
         alert('Không tìm thấy dữ liệu chỉ thị cần in!');
         return;
@@ -1972,7 +2346,7 @@ function submitAdminApproval() {
     fb.innerText = 'Đang kiểm tra quyền duyệt & sinh mã tem...';
 
     const printerSelect = document.getElementById('offcanvas_printer_select');
-    const selectedPrinter = printerSelect ? printerSelect.value : 'ZDesigner / Zebra (65x30mm)';
+    const selectedPrinter = printerSelect ? printerSelect.value : 'Standard Label Printer (65x30mm)';
 
     const formData = new FormData();
     formData.append('order_id', currentOrder.id);
@@ -1981,6 +2355,7 @@ function submitAdminApproval() {
     formData.append('box_type', document.getElementById('offcanvas_box_type')?.value || currentOrder.box_type || '1/2');
     formData.append('msnv', msnv);
     formData.append('password', pass);
+    formData.append('override_reason', overrideReason);
     formData.append('printer_name', selectedPrinter);
     formData.append('note', document.getElementById('offcanvas_note').value.trim());
 
@@ -2007,6 +2382,7 @@ function submitAdminApproval() {
         fb.innerText = '✓ ' + data.message;
         verifiedAdminMsnv = msnv;
         verifiedAdminPass = pass;
+        verifiedOverrideReason = overrideReason;
 
         // CẬP NHẬT DÒNG TƯƠNG ỨNG TRÊN BẢNG DỮ LIỆU
         updateTableRowAfterPrint(currentOrder.id, data.new_printed, data.new_remaining, currentOrder.target_qty);
@@ -2025,7 +2401,7 @@ function submitAdminApproval() {
             if (resPrinterEl) resPrinterEl.innerText = selectedPrinter;
             openModal('modal_print_result');
 
-            // Tự động kích hoạt lệnh in trực tiếp ra máy in tem nhiệt
+            // Tự động kích hoạt lệnh in trực tiếp ra máy in tem mặc định
             autoDispatchPrint();
         }, 200);
     })
@@ -2081,7 +2457,7 @@ if (btnConfirmExecute) {
         btn.innerText = '⏳ Đang lưu & sinh mã QR...';
 
         const printerSelect = document.getElementById('offcanvas_printer_select');
-        const selectedPrinter = printerSelect ? printerSelect.value : 'ZDesigner / Zebra (65x30mm)';
+        const selectedPrinter = printerSelect ? printerSelect.value : 'Standard Label Printer (65x30mm)';
 
         const formData = new FormData();
         formData.append('order_id', currentOrder.id);
@@ -2090,6 +2466,7 @@ if (btnConfirmExecute) {
         formData.append('box_type', document.getElementById('offcanvas_box_type')?.value || currentOrder.box_type || '1/2');
         formData.append('admin_msnv', verifiedAdminMsnv || '');
         formData.append('admin_pass', verifiedAdminPass || '');
+        formData.append('override_reason', verifiedOverrideReason || '');
         formData.append('printer_name', selectedPrinter);
         formData.append('note', document.getElementById('offcanvas_note').value.trim());
 
@@ -2107,11 +2484,14 @@ if (btnConfirmExecute) {
                     closeModal('modal_confirm_print');
                     verifiedAdminMsnv = null;
                     verifiedAdminPass = null;
+                    verifiedOverrideReason = null;
                     document.getElementById('modal_req_qty').innerText = (data.print_qty || currentCalculation.printQty).toLocaleString();
                     document.getElementById('modal_rem_qty').innerText = (data.remaining_qty !== undefined ? data.remaining_qty : currentOrder.remaining_qty).toLocaleString();
                     document.getElementById('modal_diff_qty').innerText = '+' + ((data.excess_qty !== undefined ? data.excess_qty : (currentCalculation.printQty - currentOrder.remaining_qty))).toLocaleString() + ' con';
                     document.getElementById('input_admin_msnv').value = '';
                     document.getElementById('input_admin_pass').value = '';
+                    const reasonEl = document.getElementById('input_override_reason');
+                    if (reasonEl) reasonEl.value = '';
                     document.getElementById('admin_verify_feedback').innerText = data.message;
                     document.getElementById('admin_verify_feedback').style.color = '#b91c1c';
                     openModal('modal_admin_approval');
@@ -2141,7 +2521,7 @@ if (btnConfirmExecute) {
             if (resPrinterEl) resPrinterEl.innerText = selectedPrinter;
             openModal('modal_print_result');
 
-            // Tự động gửi lệnh in trực tiếp đến máy in
+            // Tự động gửi lệnh in trực tiếp đến máy in mặc định
             autoDispatchPrint();
         })
         .catch(err => {
@@ -2152,16 +2532,101 @@ if (btnConfirmExecute) {
     });
 }
 
+// SẮP XẾP LẠI DÒNG TRÊN BẢNG THEO ĐÚNG THỨ TỰ ƯU TIÊN NGHIỆP VỤ
+function parseIssueMonthTimestamp(issueMonthStr, createdAtStr) {
+    const raw = (issueMonthStr || '').trim();
+    if (raw) {
+        // MM/YYYY hoặc M/YYYY hoặc MM-YYYY
+        let m = raw.match(/^(\d{1,2})[\/\-](\d{4})$/);
+        if (m) return new Date(parseInt(m[2], 10), parseInt(m[1], 10) - 1, 1).getTime();
+        // MM/YY hoặc M/YY
+        m = raw.match(/^(\d{1,2})[\/\-](\d{2})$/);
+        if (m) return new Date(2000 + parseInt(m[2], 10), parseInt(m[1], 10) - 1, 1).getTime();
+        // YYYY-MM hoặc YYYY/MM
+        m = raw.match(/^(\d{4})[\/\-](\d{1,2})$/);
+        if (m) return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, 1).getTime();
+        // DD/MM/YYYY
+        m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+        if (m) return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10)).getTime();
+        // Mon-YY hoặc Mon-YYYY (vd: Oct-26)
+        const parsed = Date.parse('01 ' + raw.replace(/[\-\/]/g, ' '));
+        if (!isNaN(parsed)) return parsed;
+    }
+    if (createdAtStr) {
+        const fb = Date.parse(createdAtStr.replace(' ', 'T'));
+        if (!isNaN(fb)) return fb;
+    }
+    return 0;
+}
+
+function getStatusSortRank(status) {
+    switch (status) {
+        case 'in_progress': return 1; // Đang in
+        case 'pending':     return 2; // Chờ in
+        case 'paused':      return 3; // Tạm dừng in
+        case 'completed':   return 4; // Hoàn thành (cuối bảng)
+        default:            return 5;
+    }
+}
+
+function sortOrdersTableRows() {
+    const tbody = document.querySelector('#orders_table tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('tr[id^="row_order_"]'));
+    if (rows.length <= 1) return;
+
+    rows.sort((trA, trB) => {
+        const idA = parseInt(trA.id.replace('row_order_', ''), 10) || 0;
+        const idB = parseInt(trB.id.replace('row_order_', ''), 10) || 0;
+        const ordA = ordersDataMap[idA] || {};
+        const ordB = ordersDataMap[idB] || {};
+
+        const statusA = ordA.status || 'pending';
+        const statusB = ordB.status || 'pending';
+
+        // Hoàn thành (completed) luôn được đẩy xuống vị trí cuối cùng của bảng
+        const isCompA = (statusA === 'completed') ? 1 : 0;
+        const isCompB = (statusB === 'completed') ? 1 : 0;
+        if (isCompA !== isCompB) return isCompA - isCompB;
+
+        // Ưu tiên 1: Tháng phát hành mới nhất lên trên cùng (DESC)
+        const timeA = parseIssueMonthTimestamp(ordA.issue_month, ordA.created_at);
+        const timeB = parseIssueMonthTimestamp(ordB.issue_month, ordB.created_at);
+        if (timeA !== timeB) return timeB - timeA;
+
+        // Ưu tiên 2: Theo trạng thái (Đang in -> Chờ in -> Tạm dừng -> Hoàn thành)
+        const rankA = getStatusSortRank(statusA);
+        const rankB = getStatusSortRank(statusB);
+        if (rankA !== rankB) return rankA - rankB;
+
+        // Cùng tháng & cùng trạng thái: ID mới nhất lên trước
+        return idB - idA;
+    });
+
+    const baseStt = <?= (int)$fromRecord ?> || 1;
+    rows.forEach((tr, idx) => {
+        tbody.appendChild(tr);
+        const sttCell = tr.querySelector('td.text-muted');
+        if (sttCell) sttCell.innerText = baseStt + idx;
+    });
+}
+
 // CẬP NHẬT DÒNG TRÊN BẢNG SAU KHI IN
 function updateTableRowAfterPrint(orderId, newPrinted, newRemaining, targetQty) {
+    const newStatus = (newRemaining <= 0) ? 'completed' : 'in_progress';
     if (ordersDataMap[orderId]) {
         ordersDataMap[orderId].printed_qty = newPrinted;
         ordersDataMap[orderId].remaining_qty = newRemaining;
-        ordersDataMap[orderId].status = (newRemaining <= 0) ? 'completed' : 'in_progress';
+        ordersDataMap[orderId].status = newStatus;
     }
 
     const row = document.getElementById('row_order_' + orderId);
     if (!row) return;
+
+    const rowChk = row.querySelector('.order-row-checkbox');
+    if (rowChk) {
+        rowChk.setAttribute('data-status', newStatus);
+    }
 
     const cellPrinted   = row.querySelector('.cell-printed');
     const cellRemaining = row.querySelector('.cell-remaining');
@@ -2190,6 +2655,9 @@ function updateTableRowAfterPrint(orderId, newPrinted, newRemaining, targetQty) 
             cellStatus.innerHTML = '<span class="badge bg-primary">Đang in</span>';
         }
     }
+
+    // Tự động sắp xếp lại vị trí dòng trên bảng theo thứ tự ưu tiên mới
+    sortOrdersTableRows();
 }
 
 // RENDER DANH SÁCH TEM THÙNG RA CẢ 2 VÙNG: PREVIEW VÀ STANDALONE PRINT ZONE
@@ -2280,7 +2748,6 @@ function autoDispatchPrint() {
     }
 
     const imagePromises = images.map((img, idx) => {
-        // Kiểm tra hợp lệ của data URI
         const isBase64 = img.src && img.src.startsWith('data:image/');
         console.log(` - QR #${idx + 1}: Base64 Valid=${isBase64}, Length=${img.src ? img.src.length : 0}, Complete=${img.complete}`);
 
@@ -2327,6 +2794,118 @@ function escapeHtml(str) {
     if (!str) return '';
     return String(str).replace(/[&<>"']/g, function(m) {
         return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'}[m];
+    });
+}
+
+// =======================================================
+// CHỌN NHIỀU CHỈ THỊ & TẠM DỪNG IN HÀNG LOẠT (BATCH PAUSE)
+// =======================================================
+function updateBatchSelectionState() {
+    const rowCheckboxes = Array.from(document.querySelectorAll('.order-row-checkbox:not(:disabled)'));
+    const checkedBoxes  = rowCheckboxes.filter(cb => cb.checked);
+    const countEl       = document.getElementById('selected_orders_count');
+    const btnBatch      = document.getElementById('btn_batch_pause_selected');
+    const selectAllChk  = document.getElementById('chk_select_all_orders');
+
+    if (countEl) countEl.innerText = checkedBoxes.length;
+    if (btnBatch) btnBatch.disabled = (checkedBoxes.length === 0);
+    if (selectAllChk) {
+        selectAllChk.checked = (rowCheckboxes.length > 0 && checkedBoxes.length === rowCheckboxes.length);
+        selectAllChk.indeterminate = (checkedBoxes.length > 0 && checkedBoxes.length < rowCheckboxes.length);
+    }
+}
+
+const chkSelectAllOrders = document.getElementById('chk_select_all_orders');
+if (chkSelectAllOrders) {
+    chkSelectAllOrders.addEventListener('change', function() {
+        const isChecked = this.checked;
+        document.querySelectorAll('.order-row-checkbox:not(:disabled)').forEach(cb => {
+            cb.checked = isChecked;
+        });
+        updateBatchSelectionState();
+    });
+}
+
+document.querySelectorAll('.order-row-checkbox').forEach(cb => {
+    cb.addEventListener('change', updateBatchSelectionState);
+});
+
+function executeBatchPauseSelected() {
+    const checkedBoxes = Array.from(document.querySelectorAll('.order-row-checkbox:not(:disabled):checked'));
+    if (checkedBoxes.length === 0) {
+        alert('Vui lòng tích chọn ít nhất 1 chỉ thị để tạm dừng in!');
+        return;
+    }
+
+    const slipList = checkedBoxes.map(cb => cb.getAttribute('data-slip')).filter(Boolean);
+    const previewSlips = slipList.slice(0, 8).join(', ') + (slipList.length > 8 ? ` ... (+${slipList.length - 8} chỉ thị)` : '');
+
+    if (!window.confirm(`Xác nhận TẠM DỪNG in tem cùng lúc cho ${checkedBoxes.length} chỉ thị đã chọn?\n(${previewSlips})`)) {
+        return;
+    }
+
+    const btn = document.getElementById('btn_batch_pause_selected');
+    if (btn) btn.disabled = true;
+
+    const fd = new FormData();
+    fd.append('action', 'batch_pause');
+    checkedBoxes.forEach(cb => fd.append('order_ids[]', cb.value));
+
+    fetch('ajax/toggle_status.php', {
+        method: 'POST',
+        body: fd
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            alert(data.message);
+            location.reload();
+        } else {
+            if (btn) btn.disabled = false;
+            alert('Lỗi: ' + data.message);
+        }
+    })
+    .catch(err => {
+        if (btn) btn.disabled = false;
+        alert('Lỗi kết nối: ' + err.message);
+    });
+}
+
+function executeBatchPauseFiltered() {
+    const totalFiltered = <?= (int)$totalRecords ?>;
+    if (totalFiltered <= 0) return;
+
+    if (!window.confirm(`Bạn có chắc chắn muốn TẠM DỪNG TẤT CẢ các chỉ thị theo bộ lọc hiện tại (${totalFiltered} chỉ thị) cùng lúc không?`)) {
+        return;
+    }
+
+    const btn = document.getElementById('btn_batch_pause_filtered');
+    if (btn) btn.disabled = true;
+
+    const fd = new FormData();
+    fd.append('action', 'batch_pause');
+    fd.append('apply_filtered', '1');
+    fd.append('filter_k', <?= json_encode($searchKeyword, JSON_UNESCAPED_UNICODE) ?>);
+    fd.append('filter_status', <?= json_encode($filterStatus, JSON_UNESCAPED_UNICODE) ?>);
+    fd.append('filter_month', <?= json_encode($filterMonth, JSON_UNESCAPED_UNICODE) ?>);
+
+    fetch('ajax/toggle_status.php', {
+        method: 'POST',
+        body: fd
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            alert(data.message);
+            location.reload();
+        } else {
+            if (btn) btn.disabled = false;
+            alert('Lỗi: ' + data.message);
+        }
+    })
+    .catch(err => {
+        if (btn) btn.disabled = false;
+        alert('Lỗi kết nối: ' + err.message);
     });
 }
 
@@ -2454,26 +3033,31 @@ function changePageLimit(newLimit) {
 // =======================================================
 // GẮN TẤT CẢ CÁC HÀM XỬ LÝ LÊN WINDOW TOÀN CỤC (GLOBAL EXPORTS)
 // =======================================================
-window.openModal              = openModal;
-window.closeModal             = closeModal;
-window.openOffcanvasPrint     = openOffcanvasPrint;
-window.openOffcanvasPrintById = openOffcanvasPrintById;
-window.openEditModalById      = openEditModalById;
-window.openEditModal          = openEditModal;
-window.confirmEditSubmit      = confirmEditSubmit;
-window.resetOffcanvasState    = resetOffcanvasState;
-window.loadOrderIntoOffcanvas = loadOrderIntoOffcanvas;
-window.onOffcanvasBoxTypeChange = onOffcanvasBoxTypeChange;
-window.searchOrderOffcanvas   = searchOrderOffcanvas;
-window.recalculateOffcanvas   = recalculateOffcanvas;
-window.updateTableRowAfterPrint = updateTableRowAfterPrint;
-window.renderPrintedLabels    = renderPrintedLabels;
-window.triggerDirectPrint     = triggerDirectPrint;
-window.requestPause           = requestPause;
-window.requestResume          = requestResume;
-window.submitAdminApproval    = submitAdminApproval;
-window.requestDeleteOrder     = requestDeleteOrder;
-window.changePageLimit        = changePageLimit;
+window.openModal                  = openModal;
+window.closeModal                 = closeModal;
+window.openOffcanvasPrint         = openOffcanvasPrint;
+window.openOffcanvasPrintById     = openOffcanvasPrintById;
+window.openEditModalById          = openEditModalById;
+window.openEditModal              = openEditModal;
+window.confirmEditSubmit          = confirmEditSubmit;
+window.resetOffcanvasState        = resetOffcanvasState;
+window.loadOrderIntoOffcanvas     = loadOrderIntoOffcanvas;
+window.onOffcanvasBoxTypeChange   = onOffcanvasBoxTypeChange;
+window.searchOrderOffcanvas       = searchOrderOffcanvas;
+window.recalculateOffcanvas       = recalculateOffcanvas;
+window.updateTableRowAfterPrint   = updateTableRowAfterPrint;
+window.renderPrintedLabels        = renderPrintedLabels;
+window.triggerDirectPrint         = triggerDirectPrint;
+window.requestPause               = requestPause;
+window.requestResume              = requestResume;
+window.submitAdminApproval        = submitAdminApproval;
+window.requestDeleteOrder         = requestDeleteOrder;
+window.changePageLimit            = changePageLimit;
+window.onDefaultPrinterChange     = onDefaultPrinterChange;
+window.savePrinterFromModal       = savePrinterFromModal;
+window.refreshConnectedPrinters   = refreshConnectedPrinters;
+window.executeBatchPauseSelected  = executeBatchPauseSelected;
+window.executeBatchPauseFiltered  = executeBatchPauseFiltered;
 
 // =======================================================
 // AJAX SUBMISSIONS DÀNH CHO CÁC MODAL THAO TÁC CHỈ THỊ (CRUD & STATUS)

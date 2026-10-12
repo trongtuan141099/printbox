@@ -578,7 +578,7 @@ function buildSpecPageUrl($pageNumber, $customParams = []) {
                     <span class="text-muted mt-1 d-block">* Cơ chế <strong>Upsert / Overwrite</strong>: Tự động ghi đè cập nhật nếu trùng khớp cặp [Mã sản phẩm + Loại thùng], hoặc thêm mới nếu chưa có. Tương thích ngược với file 6 cột cũ (tự gán Loại thùng 1).</span>
                 </div>
                 <div class="mb-3">
-                    <a href="export.php?type=sample_specs" download="sample_specs.csv" class="btn btn-sm btn-outline-primary">
+                    <a href="export.php?type=sample_specs" class="btn btn-sm btn-outline-primary">
                         📥 Tải File Mẫu Quy Cách (sample_specs.csv)
                     </a>
                 </div>

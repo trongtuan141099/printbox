@@ -25,6 +25,7 @@ if (empty($query)) {
 
 try {
     $pdo = getDbConnection();
+    $viewerPauseCondition = isViewer() ? " AND po.`status` != 'paused'" : "";
     
     // 1. Tìm kiếm chính xác mã phiếu hoặc mã chỉ thị (Sử dụng 2 tham số riêng biệt :slip_exact và :order_exact)
     $sqlExact = "SELECT po.*, 
@@ -34,7 +35,7 @@ try {
                         COALESCE(ps.unit, 'pcs') AS unit
                  FROM `production_orders` po 
                  LEFT JOIN `product_specs` ps ON po.product_code = ps.product_code AND po.box_type = ps.box_type
-                 WHERE po.`slip_code` = :slip_exact OR po.`order_code` = :order_exact 
+                 WHERE (po.`slip_code` = :slip_exact OR po.`order_code` = :order_exact)" . $viewerPauseCondition . "
                  LIMIT 1";
     $stmt = $pdo->prepare($sqlExact);
     $stmt->execute([
@@ -53,7 +54,7 @@ try {
                            COALESCE(ps.unit, 'pcs') AS unit
                     FROM `production_orders` po 
                     LEFT JOIN `product_specs` ps ON po.product_code = ps.product_code AND po.box_type = ps.box_type
-                    WHERE po.`slip_code` LIKE :slip_like OR po.`order_code` LIKE :order_like 
+                    WHERE (po.`slip_code` LIKE :slip_like OR po.`order_code` LIKE :order_like)" . $viewerPauseCondition . "
                     LIMIT 1";
         $stmtLike = $pdo->prepare($sqlLike);
         $stmtLike->execute([

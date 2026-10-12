@@ -21,12 +21,12 @@ if (!isLoggedIn()) {
     exit;
 }
 
-// 2. Phân quyền bảo mật chặt chẽ: Chỉ Admin và Editor được phép xóa
-if (!canManageDirectives()) {
+// 2. Phân quyền bảo mật chặt chẽ: Chỉ Admin mới được phép xóa chỉ thị sản xuất
+if (!isAdmin()) {
     http_response_code(403);
     echo json_encode([
         'success' => false,
-        'message' => 'LỖI PHÂN QUYỀN: Bạn không có quyền xóa chỉ thị sản xuất! Thao tác này chỉ dành riêng cho Admin hoặc Editor.'
+        'message' => 'LỖI PHÂN QUYỀN: Bạn không có quyền xóa chỉ thị sản xuất! Thao tác này chỉ dành riêng cho tài khoản Admin.'
     ]);
     exit;
 }

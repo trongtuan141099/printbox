@@ -57,13 +57,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (isset($_POST['label_height_mm'])) {
             updateSystemSetting('label_height_mm', (int)$_POST['label_height_mm'], $pdo);
         }
+        if (!empty($_POST['default_printer'])) {
+            saveDefaultPrinter(trim($_POST['default_printer']), $pdo);
+        }
 
-        setFlash('success', 'Đã lưu thành công cấu hình cấu trúc mã QR tem thùng!');
+        setFlash('success', 'Đã lưu thành công cấu hình hệ thống, máy in mặc định và cấu trúc mã QR tem thùng!');
         header("Location: settings.php");
         exit;
     } catch (Exception $e) {
         setFlash('danger', 'Lỗi lưu cấu hình: ' . $e->getMessage());
     }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_printer_only') {
+    $printerName = trim($_POST['default_printer'] ?? '');
+    if ($printerName !== '') {
+        saveDefaultPrinter($printerName, $pdo);
+        setFlash('success', "Đã lưu máy in tem mặc định: {$printerName}!");
+    } else {
+        setFlash('warning', 'Vui lòng chọn máy in hợp lệ!');
+    }
+    header("Location: settings.php");
+    exit;
 }
 
 // ========================================================
@@ -89,7 +104,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // ========================================================
 // 3. TẢI DỮ LIỆU CẤU HÌNH CHO GIAO DIỆN HIỂN THỊ
 // ========================================================
-$currentSettings = getSystemSettings($pdo);
+$forceRefreshPrinters = isset($_GET['refresh_printers']);
+$connectedPrinters = getConnectedPrinters($forceRefreshPrinters);
+$defaultPrinter = getDefaultPrinter($pdo, $forceRefreshPrinters);
+$currentSettings = getSystemSettings($pdo, true);
 $activeFields = json_decode($currentSettings['qr_fields'] ?? '[]', true) ?: [];
 
 // Danh mục tất cả các trường dữ liệu có sẵn
@@ -153,6 +171,47 @@ require_once __DIR__ . '/includes/header.php';
 <div class="row g-3">
     <!-- CỘT BÊN TRÁI: FORM CẤU HÌNH -->
     <div class="col-lg-7">
+        <!-- CẤU HÌNH MÁY IN TEM SỬ DỤNG MẶC ĐỊNH -->
+        <div class="card shadow-sm mb-3 border-primary">
+            <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
+                <span class="card-title fw-bold text-primary m-0">🖨️ Cấu Hình Máy In Tem Sử Dụng Mặc Định</span>
+                <a href="settings.php?refresh_printers=1" class="btn btn-sm btn-outline-secondary" title="Quét lại danh sách máy in kết nối">
+                    🔄 Quét lại máy in
+                </a>
+            </div>
+            <div class="card-body p-3">
+                <form method="POST" action="settings.php" id="printerSettingsForm" onsubmit="if(document.getElementById('settings_default_printer')) localStorage.setItem('printbox_default_printer', document.getElementById('settings_default_printer').value);">
+                    <input type="hidden" name="action" value="save_printer_only">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-8">
+                            <label class="form-label fw-bold small text-secondary mb-1">
+                                Máy In Tem Sử Dụng (Chỉ hiển thị máy in có kết nối thực tế với máy tính hiện tại)
+                            </label>
+                            <select name="default_printer" id="settings_default_printer" class="form-select fw-bold">
+                                <?php if (empty($connectedPrinters)): ?>
+                                    <option value="<?= htmlspecialchars($defaultPrinter) ?>"><?= htmlspecialchars($defaultPrinter) ?></option>
+                                <?php else: ?>
+                                    <?php foreach ($connectedPrinters as $p): ?>
+                                        <option value="<?= htmlspecialchars($p['name']) ?>" <?= ($p['name'] === $defaultPrinter) ? 'selected' : '' ?>>
+                                            🖨️ <?= htmlspecialchars($p['name']) ?><?= !empty($p['default']) ? ' (Mặc định hệ điều hành)' : '' ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <button type="submit" class="btn btn-success w-100 fw-bold">
+                                💾 Lưu Máy In Mặc Định
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-text small mt-1">
+                        Lựa chọn này được lưu làm mặc định cho các lần in sau. Khi bấm in ngay, lệnh in sẽ tự động gửi trực tiếp đến máy in mặc định này.
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div class="card shadow-sm mb-3">
             <div class="card-header bg-white py-2 px-3">
                 <span class="card-title fw-bold text-primary m-0">🛠️ Thiết Lập Cấu Trúc Mã QR</span>
