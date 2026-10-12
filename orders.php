@@ -1775,7 +1775,8 @@ function recalculateOffcanvas() {
     if (!currentOrder) return;
 
     const printQtyVal = parseInt(document.getElementById('offcanvas_print_qty').value, 10);
-    const packageSpec = parseInt(currentOrder.pack_qty, 10) || 1;
+    // const packageSpec = parseInt(currentOrder.pack_qty, 10) || 1;
+    const packageSpec = Number(currentOrder.pack_qty);
 
     // Reset xác thực vượt mức mỗi khi thay đổi số lượng in
     verifiedAdminMsnv = null;
@@ -1793,6 +1794,8 @@ function recalculateOffcanvas() {
     // CÔNG THỨC:
     // full_boxes = floor(printed_qty / package_spec)
     // remainder  = printed_qty % package_spec
+
+
     const fullBoxes = Math.floor(printQtyVal / packageSpec);
     const remainder = printQtyVal % packageSpec;
     const hasOdd    = (remainder > 0);
@@ -1807,6 +1810,16 @@ function recalculateOffcanvas() {
         totalBoxes: totalBoxes
     };
 
+    console.log({
+    printQtyVal,
+    pack_qty: currentOrder.pack_qty,
+    box_type: currentOrder.box_type,
+    packageSpec,
+    remainder,
+    hasOdd
+    });
+
+
     document.getElementById('oc_calc_pack').innerText = packageSpec + ' con/thùng';
     document.getElementById('oc_calc_full_boxes').innerText = fullBoxes + ' thùng (' + (fullBoxes * packageSpec) + ' con)';
     
@@ -1815,6 +1828,9 @@ function recalculateOffcanvas() {
         document.getElementById('oc_row_calc_odd').style.display = 'none';
         document.getElementById('offcanvas_odd_option').style.display = 'none';
         document.getElementById('oc_chk_odd_box').checked = false;
+            // Reset dữ liệu cũ
+    document.getElementById('oc_calc_odd_qty').innerText = '';
+    document.getElementById('oc_odd_warning_text').innerText = '';
     } else {
         // CONDITION 2: remainder > 0 -> Bắt buộc hiển thị cảnh báo & yêu cầu tick chọn in lẻ
         // CHECKBOX RULE: Mặc định để trống/chưa tick, nhân viên phải chủ động tích chọn
@@ -1836,6 +1852,8 @@ function recalculateOffcanvas() {
     } else {
         document.getElementById('offcanvas_alert_over').style.display = 'none';
     }
+
+
 }
 
 const inpPrintQty = document.getElementById('offcanvas_print_qty');

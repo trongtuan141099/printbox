@@ -229,8 +229,8 @@ function getFactoryYearCode($year = null) {
     $year = $year ? (int)$year : (int)date('Y');
     // Bảng quy ước chữ cái đại diện cho năm công nghiệp
     $yearMap = [
-        2020 => 'S', 2021 => 'T', 2022 => 'U', 2023 => 'V', 2024 => 'W', 2025 => 'X',
-        2026 => 'Y', 2027 => 'Z', 2028 => 'A', 2029 => 'B', 2030 => 'C'
+        2020 => 'y', 2021 => 'Z', 2022 => 'A', 2023 => 'B', 2024 => 'C', 2025 => 'D',
+        2026 => 'E', 2027 => 'F', 2028 => 'G', 2029 => 'H', 2030 => 'I'
     ];
     if (isset($yearMap[$year])) {
         return $yearMap[$year];
@@ -248,18 +248,18 @@ function getFactoryYearCode($year = null) {
 function getFactoryMonthCode($month = null) {
     $month = $month ? (int)$month : (int)date('n');
     $monthMap = [
-        1  => '1',
-        2  => '2',
-        3  => '3',
-        4  => '4',
-        5  => '5',
-        6  => '6',
-        7  => '7',
-        8  => '8',
-        9  => '9',
-        10 => 'D', // Quy ước tháng 10 -> 'D'
-        11 => 'B',
-        12 => 'A'  // Quy ước tháng 12 -> 'A'
+        1  => 'o',
+        2  => 'P',
+        3  => 'Q',
+        4  => 'R',
+        5  => 'S',
+        6  => 'T',
+        7  => 'U',
+        8  => 'V',
+        9  => 'W',
+        10 => 'X', // Quy ước tháng 10 -> 'D'
+        11 => 'y',
+        12 => 'Z'  // Quy ước tháng 12 -> 'A'
     ];
     return $monthMap[$month] ?? (string)$month;
 }
@@ -272,14 +272,14 @@ function getFactoryMonthCode($month = null) {
 function getFactoryDayCode($day = null) {
     $day = $day ? (int)$day : (int)date('j');
     $dayMap = [
-        1  => '1', 2  => '2', 3  => '3', 4  => '4', 5  => '5', 
-        6  => '6', 7  => '7', 8  => '8', 9  => '9',
-        10 => 'f', // Quy ước ngày 10 -> 'f'
-        11 => 'g', 12 => 'h', 13 => 'i', 14 => 'j', 15 => 'k',
-        16 => 'l', 17 => 'm', 18 => 'n', 19 => 'p', 20 => 'q',
-        21 => 'r', 22 => 's', 23 => 't', 24 => 'u', 25 => 'v',
-        26 => 'w', 27 => 'x', 28 => 'y', 29 => 'z', 30 => 'A',
-        31 => 'B'
+        1  => 'A', 2  => 'B', 3  => 'C', 4  => 'D', 5  => '=E', 
+        6  => 'F', 7  => 'G', 8  => 'H', 9  => 'i',
+        10 => 'J', // Quy ước ngày 10 -> 'f'
+        11 => 'K', 12 => 'L', 13 => 'M', 14 => 'N', 15 => 'o',
+        16 => 'P', 17 => 'Q', 18 => 'R', 19 => 'S', 20 => 'T',
+        21 => 'U', 22 => 'V', 23 => 'W', 24 => 'X', 25 => 'y',
+        26 => 'Z', 27 => 'd', 28 => 'e', 29 => 'f', 30 => 'g',
+        31 => 'h'
     ];
     return $dayMap[$day] ?? sprintf('%02d', $day);
 }
