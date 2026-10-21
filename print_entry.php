@@ -9,9 +9,10 @@ require_once __DIR__ . '/includes/header.php';
 requireRole(['admin', 'editor']);
 
 $pdo = getDbConnection();
-$connectedPrinters = getConnectedPrinters();
+$connectedPrinters = [];
 $defaultPrinter    = getDefaultPrinter($pdo);
 $defaultLabelSize  = getDefaultLabelSize($pdo);
+$currentUserId     = (int)($currentUser['id'] ?? 0);
 $prefillSlip = trim($_GET['slip'] ?? '');
 ?>
 
@@ -128,23 +129,16 @@ $prefillSlip = trim($_GET['slip'] ?? '');
 
                 <!-- MÁY IN TEM SỬ DỤNG MẶC ĐỊNH -->
                 <div class="form-group">
-                    <label class="form-label fw-bold">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <label class="form-label fw-bold" style="margin-bottom:0;">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
+                        <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="refreshEntryClientPrinters(true)">🔄 Làm mới máy in</button>
+                    </div>
                     <select id="input_printer_select" class="form-select border-primary fw-bold" onchange="onEntryPrinterChange(this.value)">
-                        <?php if (empty($connectedPrinters)): ?>
-                            <option value="<?= htmlspecialchars($defaultPrinter ?: 'Standard Label Printer (65x30mm)') ?>"><?= htmlspecialchars($defaultPrinter ?: 'Máy in tem mặc định (65x30mm)') ?></option>
-                        <?php else: ?>
-                            <?php foreach ($connectedPrinters as $p): 
-                                $pName = is_array($p) ? ($p['name'] ?? '') : (string)$p;
-                                if ($pName === '') continue;
-                            ?>
-                                <option value="<?= htmlspecialchars($pName) ?>" <?= ($pName === $defaultPrinter) ? 'selected' : '' ?>>
-                                    🖨️ <?= htmlspecialchars($pName) ?><?= (is_array($p) && !empty($p['default'])) ? ' (Mặc định hệ điều hành)' : '' ?>
-                                </option>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
+                        <option value="">⏳ Đang tải danh sách máy in trên máy tính hiện tại...</option>
                     </select>
+                    <div id="entry_printer_status_msg" style="display:none;font-size:12.5px;font-weight:700;margin-top:4px;"></div>
                     <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
-                        Chỉ hiển thị các máy in kết nối thực tế với máy tính. Tự động lưu làm mặc định cho các lần in sau.
+                        Chỉ hiển thị các máy in kết nối thực tế với máy tính hiện tại (Client PC). Tự động lưu làm mặc định theo người dùng và trình duyệt.
                     </div>
                 </div>
 
@@ -526,12 +520,51 @@ function onEntryLabelSizeChange(size) {
     applyEntryPrintPageStyle(activeEntryLabelSize);
 })();
 
+const currentEntryUserId = <?= (int)$currentUserId ?>;
+let serverEntryUserDefaultPrinter = <?= json_encode($defaultPrinter, JSON_UNESCAPED_UNICODE) ?: '""' ?>;
+let entryClientPrintersRegistry = [];
+const ENTRY_NO_PRINTER_MSG = 'Không tìm thấy máy in trên máy tính hiện tại. Vui lòng kiểm tra dịch vụ in hoặc kết nối máy in.';
+
+function isEntryVirtualPrinter(name) {
+    const n = String(name || '').trim().toLowerCase();
+    if (!n) return true;
+    return ['microsoft print to pdf', 'microsoft xps document writer', 'onenote', 'send to onenote', 'fax', 'adobe pdf', 'foxit reader pdf printer', 'pdfcreator', 'cutepdf'].some(p => n.includes(p));
+}
+
+function getEntrySavedDefaultPrinter() {
+    try {
+        const uVal = localStorage.getItem('printbox_default_printer_u_' + currentEntryUserId);
+        if (uVal && !isEntryVirtualPrinter(uVal)) return uVal;
+        if (serverEntryUserDefaultPrinter && !isEntryVirtualPrinter(serverEntryUserDefaultPrinter)) return serverEntryUserDefaultPrinter;
+        const bVal = localStorage.getItem('printbox_client_default_printer');
+        if (bVal && !isEntryVirtualPrinter(bVal)) return bVal;
+    } catch (e) {}
+    return serverEntryUserDefaultPrinter || '';
+}
+
+function setEntryPrinterMsg(msg, color = '#b91c1c') {
+    const el = document.getElementById('entry_printer_status_msg');
+    if (!el) return;
+    if (!msg) {
+        el.style.display = 'none';
+        el.innerText = '';
+    } else {
+        el.style.display = 'block';
+        el.style.color = color;
+        el.innerText = msg;
+    }
+}
+
 function onEntryPrinterChange(printerName) {
     if (!printerName) return;
+    serverEntryUserDefaultPrinter = printerName;
     try {
+        localStorage.setItem('printbox_default_printer_u_' + currentEntryUserId, printerName);
+        localStorage.setItem('printbox_client_default_printer', printerName);
         localStorage.setItem('printbox_default_printer', printerName);
         localStorage.setItem('mes_default_printer', printerName);
     } catch (e) {}
+    setEntryPrinterMsg('');
     const matchedSize = detectEntrySizeFromPrinter(printerName);
     if (matchedSize && matchedSize !== getEntryLabelSize()) {
         onEntryLabelSizeChange(matchedSize);
@@ -541,6 +574,135 @@ function onEntryPrinterChange(printerName) {
     fd.append('printer_name', printerName);
     fetch('orders.php', { method: 'POST', body: fd }).catch(() => {});
 }
+
+async function discoverEntryClientPrinters() {
+    const merged = new Map();
+    const addList = (arr) => {
+        if (!Array.isArray(arr)) return;
+        arr.forEach(item => {
+            if (!item || !item.name) return;
+            const n = String(item.name).trim();
+            if (!n || isEntryVirtualPrinter(n)) return;
+            const k = n.toLowerCase();
+            if (!merged.has(k)) merged.set(k, item);
+        });
+    };
+
+    // Probe Zebra Browser Print & Client Local Print Service on Client PC (127.0.0.1 / localhost)
+    const basePath = (window.location.pathname || '/printbox/print_entry.php').replace(/print_entry\.php.*$/, 'orders.php');
+    const localUrls = [
+        'http://127.0.0.1:9100/available',
+        'http://127.0.0.1' + basePath + '?action=client_local_printers',
+        'http://localhost' + basePath + '?action=client_local_printers'
+    ];
+    for (const url of localUrls) {
+        try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 1400);
+            const res = await fetch(url, { method: 'GET', mode: 'cors', signal: ctrl.signal });
+            clearTimeout(timer);
+            if (!res.ok) continue;
+            const data = await res.json();
+            if (data && Array.isArray(data.printer)) {
+                addList(data.printer.map(p => ({ name: p.name, default: false, source: 'zebra_browser_print', device: p })));
+            } else if (data && Array.isArray(data.printers)) {
+                addList(data.printers.map(p => ({
+                    name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
+                    default: Boolean(typeof p === 'object' && p !== null && p.default),
+                    source: 'client_local_service'
+                })));
+            }
+        } catch (e) {}
+    }
+
+    if (merged.size === 0) {
+        try {
+            const fd = new FormData();
+            fd.append('action', 'refresh_printers');
+            const res = await fetch('orders.php', { method: 'POST', body: fd });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.success && Array.isArray(data.printers)) {
+                    addList(data.printers.map(p => ({
+                        name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
+                        default: Boolean(typeof p === 'object' && p !== null && p.default),
+                        source: 'client_host_cim'
+                    })));
+                }
+            }
+        } catch (e) {}
+    }
+
+    return Array.from(merged.values());
+}
+
+async function refreshEntryClientPrinters(showFeedback = false) {
+    if (showFeedback) {
+        setEntryPrinterMsg('⏳ Đang quét các máy in trên máy tính hiện tại...', '#2563eb');
+    }
+    const discovered = await discoverEntryClientPrinters();
+    entryClientPrintersRegistry = discovered;
+    const saved = getEntrySavedDefaultPrinter();
+    const sel = document.getElementById('input_printer_select');
+    if (!sel) return;
+    sel.innerHTML = '';
+
+    let selectedPrinter = '';
+    let savedMissing = false;
+
+    if (discovered.length > 0) {
+        if (saved) {
+            const found = discovered.find(p => p.name.toLowerCase() === saved.toLowerCase());
+            if (found) {
+                selectedPrinter = found.name;
+            } else {
+                savedMissing = true;
+            }
+        } else {
+            const defP = discovered.find(p => p.default) || discovered[0];
+            if (defP) {
+                selectedPrinter = defP.name;
+                onEntryPrinterChange(selectedPrinter);
+            }
+        }
+    }
+
+    if (discovered.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '⚠️ Không tìm thấy máy in trên máy tính hiện tại';
+        sel.appendChild(opt);
+        sel.value = '';
+        setEntryPrinterMsg(ENTRY_NO_PRINTER_MSG, '#b91c1c');
+    } else {
+        if (savedMissing || !selectedPrinter) {
+            const promptOpt = document.createElement('option');
+            promptOpt.value = '';
+            promptOpt.textContent = savedMissing
+                ? `-- Máy in "${saved}" không còn kết nối, vui lòng chọn lại --`
+                : '-- Chọn máy in trên máy tính hiện tại --';
+            promptOpt.selected = true;
+            sel.appendChild(promptOpt);
+        }
+        discovered.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = '🖨️ ' + p.name + (p.default ? ' (Mặc định máy trạm)' : '');
+            if (selectedPrinter && p.name === selectedPrinter) opt.selected = true;
+            sel.appendChild(opt);
+        });
+
+        if (savedMissing) {
+            setEntryPrinterMsg(`⚠️ Máy in mặc định đã lưu ("${saved}") không còn tồn tại trên máy tính này. Vui lòng chọn lại máy in!`, '#b45309');
+        } else if (showFeedback) {
+            setEntryPrinterMsg(`✓ Đã tìm thấy ${discovered.length} máy in trên máy tính hiện tại!`, '#15803d');
+        } else {
+            setEntryPrinterMsg('');
+        }
+    }
+}
+
+refreshEntryClientPrinters(false);
 
 // BƯỚC 1: TRA CỨU CHỈ THỊ THEO MÃ PHIẾU HOẶC MÃ CHỈ THỊ
 function searchOrder() {
@@ -730,8 +892,10 @@ function validateEntryPrePrint() {
     }
     const printerSelect = document.getElementById('input_printer_select');
     const selectedPrinter = printerSelect ? printerSelect.value.trim() : '';
-    if (!selectedPrinter) {
-        errors.push('Chưa chọn Máy in tem.');
+    if (entryClientPrintersRegistry.length === 0) {
+        errors.push(ENTRY_NO_PRINTER_MSG);
+    } else if (!selectedPrinter) {
+        errors.push('Vui lòng chọn máy in tem đang kết nối trên máy tính hiện tại.');
     }
     const selectedSize = getEntryLabelSize();
     if (selectedSize !== '65x30' && selectedSize !== '110x80') {

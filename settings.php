@@ -109,9 +109,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // 3. TẢI DỮ LIỆU CẤU HÌNH CHO GIAO DIỆN HIỂN THỊ
 // ========================================================
 $forceRefreshPrinters = isset($_GET['refresh_printers']);
-$connectedPrinters = getConnectedPrinters($forceRefreshPrinters);
+$connectedPrinters = [];
 $defaultPrinter = getDefaultPrinter($pdo, $forceRefreshPrinters);
 $defaultLabelSize = getDefaultLabelSize($pdo, $forceRefreshPrinters);
+$currentSettingsUser = getCurrentUser();
+$currentSettingsUserId = (int)($currentSettingsUser['id'] ?? 0);
 $currentSettings = getSystemSettings($pdo, true);
 $activeFields = json_decode($currentSettings['qr_fields'] ?? '[]', true) ?: [];
 
@@ -180,28 +182,20 @@ require_once __DIR__ . '/includes/header.php';
         <div class="card shadow-sm mb-3 border-primary">
             <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
                 <span class="card-title fw-bold text-primary m-0">🖨️ Cấu Hình Máy In Tem Sử Dụng Mặc Định</span>
-                <a href="settings.php?refresh_printers=1" class="btn btn-sm btn-outline-secondary" title="Quét lại danh sách máy in kết nối">
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshSettingsClientPrinters(true)" title="Quét lại danh sách máy in kết nối trên máy tính hiện tại">
                     🔄 Quét lại máy in
-                </a>
+                </button>
             </div>
             <div class="card-body p-3">
-                <form method="POST" action="settings.php" id="printerSettingsForm" onsubmit="if(document.getElementById('settings_default_printer')) localStorage.setItem('printbox_default_printer', document.getElementById('settings_default_printer').value); if(document.getElementById('settings_default_label_size')) localStorage.setItem('printbox_default_label_size', document.getElementById('settings_default_label_size').value);">
+                <form method="POST" action="settings.php" id="printerSettingsForm" onsubmit="return onSettingsPrinterFormSubmit();">
                     <input type="hidden" name="action" value="save_printer_only">
                     <div class="row g-2 align-items-end">
                         <div class="col-md-5">
                             <label class="form-label fw-bold small text-secondary mb-1">
-                                🖨️ Máy In Tem Sử Dụng
+                                🖨️ Máy In Tem Sử Dụng (Mặc định)
                             </label>
                             <select name="default_printer" id="settings_default_printer" class="form-select fw-bold" onchange="onSettingsPrinterSelectChange(this.value)">
-                                <?php if (empty($connectedPrinters)): ?>
-                                    <option value="<?= htmlspecialchars($defaultPrinter) ?>"><?= htmlspecialchars($defaultPrinter) ?></option>
-                                <?php else: ?>
-                                    <?php foreach ($connectedPrinters as $p): ?>
-                                        <option value="<?= htmlspecialchars($p['name']) ?>" <?= ($p['name'] === $defaultPrinter) ? 'selected' : '' ?>>
-                                            🖨️ <?= htmlspecialchars($p['name']) ?><?= !empty($p['default']) ? ' (Mặc định hệ điều hành)' : '' ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
+                                <option value="">⏳ Đang tải danh sách máy in trên máy tính hiện tại...</option>
                             </select>
                         </div>
                         <div class="col-md-4">
@@ -219,8 +213,9 @@ require_once __DIR__ . '/includes/header.php';
                             </button>
                         </div>
                     </div>
+                    <div id="settings_printer_status_msg" class="small fw-bold mt-2" style="display:none;"></div>
                     <div class="form-text small mt-1">
-                        Lựa chọn này được lưu làm mặc định cho các lần in sau. Khổ tem và máy in sẽ được đồng bộ tự động với màn hình Chỉ Thị Sản Xuất.
+                        Chỉ hiển thị các máy in kết nối thực tế với máy tính hiện tại (Client PC). Lựa chọn này được lưu làm mặc định theo người dùng và trình duyệt.
                     </div>
                 </form>
             </div>
@@ -370,6 +365,40 @@ require_once __DIR__ . '/includes/header.php';
 
 <script>
 const availableDefs = <?= json_encode($availableFieldDefs, JSON_UNESCAPED_UNICODE) ?>;
+const settingsCurrentUserId = <?= (int)$currentSettingsUserId ?>;
+let settingsServerDefaultPrinter = <?= json_encode($defaultPrinter, JSON_UNESCAPED_UNICODE) ?: '""' ?>;
+const SETTINGS_NO_PRINTER_MSG = 'Không tìm thấy máy in trên máy tính hiện tại. Vui lòng kiểm tra dịch vụ in hoặc kết nối máy in.';
+
+function isSettingsVirtualPrinter(name) {
+    const n = String(name || '').trim().toLowerCase();
+    if (!n) return true;
+    return ['microsoft print to pdf', 'microsoft xps document writer', 'onenote', 'send to onenote', 'fax', 'adobe pdf', 'foxit reader pdf printer', 'pdfcreator', 'cutepdf'].some(p => n.includes(p));
+}
+
+function getSettingsSavedDefaultPrinter() {
+    try {
+        const uVal = localStorage.getItem('printbox_default_printer_u_' + settingsCurrentUserId);
+        if (uVal && !isSettingsVirtualPrinter(uVal)) return uVal;
+        if (settingsServerDefaultPrinter && !isSettingsVirtualPrinter(settingsServerDefaultPrinter)) return settingsServerDefaultPrinter;
+        const bVal = localStorage.getItem('printbox_client_default_printer');
+        if (bVal && !isSettingsVirtualPrinter(bVal)) return bVal;
+    } catch (e) {}
+    return settingsServerDefaultPrinter || '';
+}
+
+function setSettingsPrinterMsg(msg, color = '#b91c1c') {
+    const el = document.getElementById('settings_printer_status_msg');
+    if (!el) return;
+    if (!msg) {
+        el.style.display = 'none';
+        el.innerText = '';
+    } else {
+        el.style.display = 'block';
+        el.style.color = color;
+        el.innerText = msg;
+    }
+}
+
 function onSettingsPrinterSelectChange(printerName) {
     const name = String(printerName || '').toLowerCase();
     const sizeSel = document.getElementById('settings_default_label_size');
@@ -382,6 +411,145 @@ function onSettingsPrinterSelectChange(printerName) {
         updateSettingsLabelPreview('65x30');
     }
 }
+
+function onSettingsPrinterFormSubmit() {
+    const sel = document.getElementById('settings_default_printer');
+    const sizeSel = document.getElementById('settings_default_label_size');
+    if (!sel || !sel.value) {
+        alert('Vui lòng chọn máy in tem đang kết nối trên máy tính hiện tại trước khi lưu!');
+        return false;
+    }
+    try {
+        localStorage.setItem('printbox_default_printer_u_' + settingsCurrentUserId, sel.value);
+        localStorage.setItem('printbox_client_default_printer', sel.value);
+        localStorage.setItem('printbox_default_printer', sel.value);
+        localStorage.setItem('mes_default_printer', sel.value);
+        if (sizeSel && sizeSel.value) {
+            localStorage.setItem('printbox_default_label_size', sizeSel.value);
+        }
+    } catch (e) {}
+    return true;
+}
+
+async function refreshSettingsClientPrinters(showFeedback = false) {
+    if (showFeedback) {
+        setSettingsPrinterMsg('⏳ Đang quét các máy in trên máy tính hiện tại...', '#2563eb');
+    }
+    const merged = new Map();
+    const addList = (arr) => {
+        if (!Array.isArray(arr)) return;
+        arr.forEach(item => {
+            if (!item || !item.name) return;
+            const n = String(item.name).trim();
+            if (!n || isSettingsVirtualPrinter(n)) return;
+            const k = n.toLowerCase();
+            if (!merged.has(k)) merged.set(k, item);
+        });
+    };
+
+    const basePath = (window.location.pathname || '/printbox/settings.php').replace(/settings\.php.*$/, 'orders.php');
+    const localUrls = [
+        'http://127.0.0.1:9100/available',
+        'http://127.0.0.1' + basePath + '?action=client_local_printers',
+        'http://localhost' + basePath + '?action=client_local_printers'
+    ];
+    for (const url of localUrls) {
+        try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 1400);
+            const res = await fetch(url, { method: 'GET', mode: 'cors', signal: ctrl.signal });
+            clearTimeout(timer);
+            if (!res.ok) continue;
+            const data = await res.json();
+            if (data && Array.isArray(data.printer)) {
+                addList(data.printer.map(p => ({ name: p.name, default: false })));
+            } else if (data && Array.isArray(data.printers)) {
+                addList(data.printers.map(p => ({
+                    name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
+                    default: Boolean(typeof p === 'object' && p !== null && p.default)
+                })));
+            }
+        } catch (e) {}
+    }
+
+    if (merged.size === 0) {
+        try {
+            const fd = new FormData();
+            fd.append('action', 'refresh_printers');
+            const res = await fetch('orders.php', { method: 'POST', body: fd });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.success && Array.isArray(data.printers)) {
+                    addList(data.printers.map(p => ({
+                        name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
+                        default: Boolean(typeof p === 'object' && p !== null && p.default)
+                    })));
+                }
+            }
+        } catch (e) {}
+    }
+
+    const discovered = Array.from(merged.values());
+    const saved = getSettingsSavedDefaultPrinter();
+    const sel = document.getElementById('settings_default_printer');
+    if (!sel) return;
+    sel.innerHTML = '';
+
+    let selectedPrinter = '';
+    let savedMissing = false;
+
+    if (discovered.length > 0) {
+        if (saved) {
+            const found = discovered.find(p => p.name.toLowerCase() === saved.toLowerCase());
+            if (found) {
+                selectedPrinter = found.name;
+            } else {
+                savedMissing = true;
+            }
+        } else {
+            const defP = discovered.find(p => p.default) || discovered[0];
+            if (defP) {
+                selectedPrinter = defP.name;
+            }
+        }
+    }
+
+    if (discovered.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '⚠️ Không tìm thấy máy in trên máy tính hiện tại';
+        sel.appendChild(opt);
+        sel.value = '';
+        setSettingsPrinterMsg(SETTINGS_NO_PRINTER_MSG, '#b91c1c');
+    } else {
+        if (savedMissing || !selectedPrinter) {
+            const promptOpt = document.createElement('option');
+            promptOpt.value = '';
+            promptOpt.textContent = savedMissing
+                ? `-- Máy in "${saved}" không còn kết nối, vui lòng chọn lại --`
+                : '-- Chọn máy in trên máy tính hiện tại --';
+            promptOpt.selected = true;
+            sel.appendChild(promptOpt);
+        }
+        discovered.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = '🖨️ ' + p.name + (p.default ? ' (Mặc định máy trạm)' : '');
+            if (selectedPrinter && p.name === selectedPrinter) opt.selected = true;
+            sel.appendChild(opt);
+        });
+
+        if (savedMissing) {
+            setSettingsPrinterMsg(`⚠️ Máy in mặc định đã lưu ("${saved}") không còn tồn tại trên máy tính này. Vui lòng chọn lại máy in!`, '#b45309');
+        } else if (showFeedback) {
+            setSettingsPrinterMsg(`✓ Đã tìm thấy ${discovered.length} máy in trên máy tính hiện tại!`, '#15803d');
+        } else {
+            setSettingsPrinterMsg('');
+        }
+    }
+}
+
+refreshSettingsClientPrinters(false);
 
 function updateSettingsLabelPreview(size) {
     const box = document.getElementById('settings_preview_box');

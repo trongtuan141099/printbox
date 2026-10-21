@@ -611,98 +611,188 @@ function ensurePrintHistorySchema(PDO $pdo = null) {
 }
 
 /**
- * Lấy danh sách các máy in được cài đặt và kết nối trên hệ thống Windows hiện tại
- * Ưu tiên sắp xếp các máy in đang kết nối trực tuyến (WorkOffline = false) và máy in tem chuyên dụng lên đầu
- * @param bool $forceRefresh Bỏ qua cache để quét lại máy in
- * @return array Danh sách máy in [['name' => string, 'default' => bool, 'port' => string, 'status' => int, 'online' => bool]]
+ * Check whether the current HTTP request originates directly from the Client PC's local loopback
+ * or the same physical workstation, ensuring Server printers are never exposed to remote Client PCs.
+ * @return bool
+ */
+function isClientLocalMachine() {
+    $remoteAddr = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+    $serverAddr = trim((string)($_SERVER['SERVER_ADDR'] ?? ''));
+    if ($remoteAddr === '127.0.0.1' || $remoteAddr === '::1' || strtolower($remoteAddr) === 'localhost') {
+        return true;
+    }
+    if ($remoteAddr !== '' && $serverAddr !== '' && $remoteAddr === $serverAddr) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Check whether a printer entry is a Windows virtual software printer (PDF, XPS, OneNote, Fax)
+ * rather than a real physical/label/network printer connected to the Client PC.
+ * @param string $printerName
+ * @param string $driverName
+ * @param string $portName
+ * @return bool
+ */
+function isVirtualSoftwarePrinter($printerName, $driverName = '', $portName = '') {
+    $pName = trim((string)$printerName);
+    $dName = trim((string)$driverName);
+    $port  = trim((string)$portName);
+
+    if ($pName === '') {
+        return true;
+    }
+    if (preg_match('/^(Fax|OneNote|Send To OneNote|Microsoft XPS Document Writer|Microsoft Print to PDF|Adobe PDF|Foxit Reader PDF)/i', $pName)) {
+        return true;
+    }
+    if (preg_match('/(Microsoft Print To PDF|Microsoft XPS Document Writer|Send to Microsoft OneNote|Microsoft Shared Fax Driver|Microsoft Software Printer Driver)/i', $dName)) {
+        return true;
+    }
+    if (preg_match('/^(PORTPROMPT:|nul:|SHRFAX:|FILE:|Microsoft\.Office\.OneNote)/i', $port)) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Retrieve real printers available on the Client PC (never returning Server printers to a remote PC).
+ * Excludes virtual software printers (PDF, XPS, OneNote, Fax) and prioritizes thermal label printers.
+ * @param bool $forceRefresh Ignore session cache to rescan client printers
+ * @return array List of printers [['name' => string, 'default' => bool, 'port' => string, 'status' => int, 'online' => bool, 'is_thermal' => bool, 'source' => string]]
  */
 function getConnectedPrinters($forceRefresh = false) {
     if (session_status() === PHP_SESSION_NONE) {
         @session_start();
     }
 
+    $remoteIp  = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+    $isLocalPc = isClientLocalMachine();
+    $cacheKey  = 'client_printers_cache_' . md5($remoteIp . '_' . ($isLocalPc ? 'local' : 'remote'));
+    $cacheTs   = $cacheKey . '_ts';
+
     if (
         !$forceRefresh &&
-        isset($_SESSION['connected_printers_cache'], $_SESSION['connected_printers_ts']) &&
-        (time() - (int)$_SESSION['connected_printers_ts']) < 60 &&
-        is_array($_SESSION['connected_printers_cache']) &&
-        !empty($_SESSION['connected_printers_cache'])
+        isset($_SESSION[$cacheKey], $_SESSION[$cacheTs]) &&
+        (time() - (int)$_SESSION[$cacheTs]) < 30 &&
+        is_array($_SESSION[$cacheKey])
     ) {
-        return $_SESSION['connected_printers_cache'];
+        return $_SESSION[$cacheKey];
     }
 
     $printers = [];
 
     if (stripos(PHP_OS_FAMILY, 'Windows') !== false && function_exists('shell_exec')) {
-        $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Printer | Select-Object Name, Default, WorkOffline, PrinterStatus, PortName, DriverName | ConvertTo-Json -Compress" 2>nul';
-        $output = @shell_exec($cmd);
-        if (!empty($output)) {
-            $decoded = json_decode(trim($output), true);
-            if (is_array($decoded)) {
-                if (isset($decoded['Name'])) {
-                    $decoded = [$decoded];
+        $cmd = null;
+        if ($isLocalPc) {
+            // Request originates directly from the Client PC's loopback/local workstation
+            $cmd = 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Printer | Select-Object Name, Default, WorkOffline, PrinterStatus, PortName, DriverName, SystemName | ConvertTo-Json -Compress" 2>nul';
+        } elseif (filter_var($remoteIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            // Remote Client PC on LAN: ONLY query the Client PC's IP (-ComputerName), NEVER query the Server's local printers
+            $safeIp = escapeshellarg($remoteIp);
+            $cmd = 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference=\'Stop\'; try { Get-CimInstance Win32_Printer -ComputerName ' . $safeIp . ' -OperationTimeoutSec 2 | Select-Object Name, Default, WorkOffline, PrinterStatus, PortName, DriverName, SystemName | ConvertTo-Json -Compress } catch { }" 2>nul';
+        }
+
+        if ($cmd !== null) {
+            $output = @shell_exec($cmd);
+            if (!empty($output)) {
+                $decoded = json_decode(trim($output), true);
+                if (is_array($decoded)) {
+                    if (isset($decoded['Name'])) {
+                        $decoded = [$decoded];
+                    }
+                    $serverHost = strtolower(trim((string)(getenv('COMPUTERNAME') ?: php_uname('n'))));
+                    $onlineList  = [];
+                    $offlineList = [];
+
+                    foreach ($decoded as $item) {
+                        if (!is_array($item) || empty($item['Name'])) continue;
+                        $pName      = trim((string)$item['Name']);
+                        $driverName = trim((string)$item['DriverName'] ?? '');
+                        $portName   = trim((string)$item['PortName'] ?? '');
+                        $sysName    = strtolower(trim((string)($item['SystemName'] ?? '')));
+
+                        // If remote client PC, strictly guard against any printer belonging to the Server host
+                        if (!$isLocalPc && $serverHost !== '' && $sysName === $serverHost) {
+                            continue;
+                        }
+
+                        // Filter out virtual software printers (OneNote, Print to PDF, XPS, Fax)
+                        if (isVirtualSoftwarePrinter($pName, $driverName, $portName)) {
+                            continue;
+                        }
+
+                        $workOffline   = !empty($item['WorkOffline']);
+                        $printerStatus = (int)($item['PrinterStatus'] ?? 3);
+                        $isOnline      = (!$workOffline && $printerStatus !== 7);
+                        $isThermal     = (
+                            stripos($pName, 'ZDesigner') !== false ||
+                            stripos($pName, 'Zebra') !== false ||
+                            stripos($pName, 'XPrinter') !== false ||
+                            stripos($pName, 'Godex') !== false ||
+                            stripos($pName, 'TSC') !== false ||
+                            stripos($pName, 'Bixolon') !== false ||
+                            stripos($pName, 'Honeywell') !== false ||
+                            stripos($pName, '65x30') !== false ||
+                            stripos($pName, '80x110') !== false ||
+                            stripos($pName, '110x80') !== false ||
+                            stripos($pName, '80x100') !== false ||
+                            stripos($pName, '100x80') !== false ||
+                            stripos($driverName, 'ZDesigner') !== false ||
+                            stripos($driverName, 'Zebra') !== false ||
+                            stripos($driverName, 'XPrinter') !== false
+                        );
+
+                        $entry = [
+                            'name'       => $pName,
+                            'default'    => !empty($item['Default']),
+                            'port'       => $portName,
+                            'driver'     => $driverName,
+                            'status'     => $printerStatus,
+                            'online'     => $isOnline,
+                            'is_thermal' => $isThermal,
+                            'source'     => 'client_os'
+                        ];
+
+                        if ($isOnline) {
+                            $onlineList[] = $entry;
+                        } else {
+                            $offlineList[] = $entry;
+                        }
+                    }
+
+                    $sortFn = function($a, $b) {
+                        if ($a['is_thermal'] !== $b['is_thermal']) {
+                            return $a['is_thermal'] ? -1 : 1;
+                        }
+                        if ($a['online'] !== $b['online']) {
+                            return $a['online'] ? -1 : 1;
+                        }
+                        if ($a['default'] !== $b['default']) {
+                            return $a['default'] ? -1 : 1;
+                        }
+                        return strcasecmp($a['name'], $b['name']);
+                    };
+
+                    usort($onlineList, $sortFn);
+                    usort($offlineList, $sortFn);
+                    $printers = array_merge($onlineList, $offlineList);
                 }
-                $onlineList  = [];
-                $offlineList = [];
-                foreach ($decoded as $item) {
-                    if (!is_array($item) || empty($item['Name'])) continue;
-                    $pName = trim((string)$item['Name']);
-                    if (strcasecmp($pName, 'Fax') === 0) continue;
-
-                    $workOffline   = !empty($item['WorkOffline']);
-                    $printerStatus = (int)($item['PrinterStatus'] ?? 3);
-                    $isOnline      = (!$workOffline && $printerStatus !== 7);
-                    $driverName    = trim((string)($item['DriverName'] ?? ''));
-                    $isThermal     = (
-                        stripos($pName, 'ZDesigner') !== false ||
-                        stripos($pName, 'Zebra') !== false ||
-                        stripos($pName, '65x30') !== false ||
-                        stripos($pName, '80x110') !== false ||
-                        stripos($pName, '110x80') !== false ||
-                        stripos($driverName, 'ZDesigner') !== false
-                    );
-
-                    $entry = [
-                        'name'       => $pName,
-                        'default'    => !empty($item['Default']),
-                        'port'       => trim((string)($item['PortName'] ?? '')),
-                        'status'     => $printerStatus,
-                        'online'     => $isOnline,
-                        'is_thermal' => $isThermal
-                    ];
-
-                    if ($isOnline || $isThermal) {
-                        $onlineList[] = $entry;
-                    } else {
-                        $offlineList[] = $entry;
-                    }
-                }
-                // Prioritize thermal label printers & online printers first
-                usort($onlineList, function($a, $b) {
-                    if ($a['is_thermal'] !== $b['is_thermal']) {
-                        return $a['is_thermal'] ? -1 : 1;
-                    }
-                    if ($a['online'] !== $b['online']) {
-                        return $a['online'] ? -1 : 1;
-                    }
-                    return 0;
-                });
-                $printers = !empty($onlineList) ? $onlineList : $offlineList;
             }
         }
     }
 
-    $_SESSION['connected_printers_cache'] = $printers;
-    $_SESSION['connected_printers_ts']    = time();
+    $_SESSION[$cacheKey] = $printers;
+    $_SESSION[$cacheTs]  = time();
 
     return $printers;
 }
 
 /**
- * Lấy máy in mặc định đã cấu hình cho hệ thống/người dùng (khớp với danh sách máy in kết nối thực tế)
+ * Retrieve the saved default printer for the current user (never falling back to Server printers or global settings).
  * @param PDO|null $pdo
  * @param bool $forceRefresh
- * @return string
+ * @return string Saved printer name for this user, or '' if not yet chosen
  */
 function getDefaultPrinter(PDO $pdo = null, $forceRefresh = false) {
     if (session_status() === PHP_SESSION_NONE) {
@@ -712,35 +802,28 @@ function getDefaultPrinter(PDO $pdo = null, $forceRefresh = false) {
         $pdo = getDbConnection();
     }
 
-    $connected = getConnectedPrinters($forceRefresh);
-    $connectedNames = array_column($connected, 'name');
+    $userId = (int)($_SESSION['user_id'] ?? 0);
+    $userSessionKey = 'default_printer_u_' . $userId;
 
-    $settings = getSystemSettings($pdo, $forceRefresh);
-    $savedUserPrinter = trim($_SESSION['default_printer'] ?? '');
-    $savedSysPrinter  = trim($settings['default_printer'] ?? '');
-
-    if (!empty($connectedNames)) {
-        if ($savedUserPrinter !== '' && in_array($savedUserPrinter, $connectedNames, true)) {
-            return $savedUserPrinter;
-        }
-        if ($savedSysPrinter !== '' && in_array($savedSysPrinter, $connectedNames, true)) {
-            return $savedSysPrinter;
-        }
-        foreach ($connected as $p) {
-            if (!empty($p['default'])) {
-                return $p['name'];
-            }
-        }
-        return $connectedNames[0];
+    $savedUserPrinter = trim((string)($_SESSION[$userSessionKey] ?? $_SESSION['default_printer'] ?? ''));
+    if ($savedUserPrinter !== '' && !isVirtualSoftwarePrinter($savedUserPrinter)) {
+        return $savedUserPrinter;
     }
 
-    if ($savedUserPrinter !== '') return $savedUserPrinter;
-    if ($savedSysPrinter !== '') return $savedSysPrinter;
-    return 'Microsoft Print to PDF';
+    if ($userId > 0) {
+        $settings = getSystemSettings($pdo, $forceRefresh);
+        $dbUserPrinter = trim((string)($settings['default_printer_user_' . $userId] ?? ''));
+        if ($dbUserPrinter !== '' && !isVirtualSoftwarePrinter($dbUserPrinter)) {
+            $_SESSION[$userSessionKey] = $dbUserPrinter;
+            return $dbUserPrinter;
+        }
+    }
+
+    return '';
 }
 
 /**
- * Lưu máy in mặc định cho hệ thống và người dùng, đồng thời đặt làm máy in mặc định của Windows
+ * Save the default printer per user (and session), without overwriting other users' settings or Server OS printers.
  * @param string $printerName
  * @param PDO|null $pdo
  * @return bool
@@ -758,18 +841,14 @@ function saveDefaultPrinter($printerName, PDO $pdo = null) {
         $pdo = getDbConnection();
     }
 
-    $_SESSION['default_printer'] = $printerName;
-    updateSystemSetting('default_printer', $printerName, $pdo);
+    $userId = (int)($_SESSION['user_id'] ?? 0);
+    $userSessionKey = 'default_printer_u_' . $userId;
 
-    if (stripos(PHP_OS_FAMILY, 'Windows') !== false && function_exists('shell_exec')) {
-        $escapedPrinter = str_replace('"', '\"', $printerName);
-        @shell_exec('rundll32 printui.dll,PrintUIEntry /y /n "' . $escapedPrinter . '" 2>nul');
-        if (isset($_SESSION['connected_printers_cache']) && is_array($_SESSION['connected_printers_cache'])) {
-            foreach ($_SESSION['connected_printers_cache'] as &$p) {
-                $p['default'] = ($p['name'] === $printerName);
-            }
-            unset($p);
-        }
+    $_SESSION[$userSessionKey]   = $printerName;
+    $_SESSION['default_printer'] = $printerName;
+
+    if ($userId > 0) {
+        updateSystemSetting('default_printer_user_' . $userId, $printerName, $pdo);
     }
 
     return true;
@@ -941,6 +1020,16 @@ function dispatchWindowsDirectPrint(array $labels, $printerName, $labelSize = '6
             'success'       => false,
             'message'       => 'Thiếu dữ liệu tem hoặc chưa chọn máy in.',
             'pages_printed' => 0
+        ];
+    }
+
+    // Never print on the Server's local printer when the request comes from a remote Client PC
+    if (!isClientLocalMachine() && !str_starts_with($printerName, '\\\\')) {
+        return [
+            'success'         => false,
+            'client_dispatch' => true,
+            'message'         => 'Chuyển lệnh in trực tiếp về máy tính người dùng hiện tại (Client PC).',
+            'pages_printed'   => 0
         ];
     }
 
