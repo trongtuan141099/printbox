@@ -1095,8 +1095,135 @@ body.modal-open {
     color: #000000;
 }
 
+
+/* =======================================================
+   KÍCH THƯỚC TEM LỚN (80 × 100 mm / 100 × 80 mm / 110 × 80 mm - LANDSCAPE NGANG) - SCREEN PREVIEW
+   Tận dụng tối đa diện tích tem, QR Code phóng lớn 62x62mm, chữ to rõ đọc từ xa
+   ======================================================= */
+.label-size-110x80 .box-label-item,
+.box-label-item.label-size-110x80 {
+    width: 104mm;
+    height: 78mm;
+    max-width: 104mm;
+    max-height: 78mm;
+    padding: 2mm 2mm;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2.2mm;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.label-size-110x80 .label-qr-col,
+.box-label-item.label-size-110x80 .label-qr-col {
+    width: 58mm;
+    height: 58mm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin: 0;
+}
+
+.label-size-110x80 .label-qr-col img,
+.label-size-110x80 .label-qr-col svg,
+.box-label-item.label-size-110x80 .label-qr-col img,
+.box-label-item.label-size-110x80 .label-qr-col svg {
+    width: 58mm;
+    height: 58mm;
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+.label-size-110x80 .label-text-col,
+.box-label-item.label-size-110x80 .label-text-col {
+    flex: 1;
+    min-width: 0;
+    height: 73mm;
+    max-height: 73mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+    line-height: 1.15;
+    text-align: left;
+}
+
+.label-size-110x80 .label-line-1,
+.box-label-item.label-size-110x80 .label-line-1 {
+    font-size: 16.5pt;
+    font-weight: 900;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #000000;
+}
+
+.label-size-110x80 .label-line-2,
+.box-label-item.label-size-110x80 .label-line-2 {
+    font-size: 14.5pt;
+    font-weight: 800;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #000000;
+}
+
+.label-size-110x80 .label-line-3,
+.box-label-item.label-size-110x80 .label-line-3 {
+    font-size: 14pt;
+    font-weight: 900;
+    text-align: left;
+    letter-spacing: 2px;
+    color: #000000;
+}
+
+.label-size-110x80 .label-line-4,
+.box-label-item.label-size-110x80 .label-line-4 {
+    font-size: 12.5pt;
+    font-weight: 700;
+    text-align: left;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.15;
+    color: #000000;
+}
+
+.label-size-110x80 .label-line-5,
+.box-label-item.label-size-110x80 .label-line-5 {
+    font-size: 16.5pt;
+    font-weight: 900;
+    letter-spacing: 0.4px;
+    text-align: left;
+    border-top: 2.5px solid #000000;
+    padding-top: 1.8mm;
+    margin-top: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #000000;
+}
+
+/* Render off-screen on normal display so browser eagerly decodes QR images before window.print() */
 #print_standalone_zone {
-    display: none !important;
+    position: fixed !important;
+    left: -9999px !important;
+    top: 0 !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    z-index: -1 !important;
 }
 
 /* IN ẤN TRÌNH DUYỆT CÔNG NGHIỆP (@MEDIA PRINT) */
@@ -1107,12 +1234,17 @@ body.modal-open {
     }
     
     html, body {
-        width: 65mm !important;
+        display: block !important;
+        width: auto !important;
+        min-height: 0 !important;
         height: auto !important;
         margin: 0 !important;
         padding: 0 !important;
         background: #ffffff !important;
         overflow: visible !important;
+        transform: none !important;
+        zoom: 1 !important;
+        scale: 1 !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
     }
@@ -1125,16 +1257,21 @@ body.modal-open {
     #print_standalone_zone {
         display: block !important;
         visibility: visible !important;
-        position: absolute !important;
-        left: 0 !important;
-        top: 0 !important;
+        position: static !important;
+        left: auto !important;
+        top: auto !important;
         width: 65mm !important;
+        height: auto !important;
         margin: 0 !important;
         padding: 0 !important;
         border: none !important;
         background: #ffffff !important;
         box-shadow: none !important;
+        opacity: 1 !important;
         overflow: visible !important;
+        transform: none !important;
+        zoom: 1 !important;
+        z-index: auto !important;
     }
 
     #print_standalone_zone * {
@@ -1143,18 +1280,23 @@ body.modal-open {
 
     #print_standalone_zone .box-label-item {
         width: 65mm !important;
-        height: 30mm !important;
-        max-height: 30mm !important;
+        height: 29.5mm !important;
+        max-height: 29.5mm !important;
         margin: 0 !important;
-        padding: 1.5mm 2mm !important;
+        padding: 1.2mm 1.5mm !important;
         box-sizing: border-box !important;
         border: none !important;
         box-shadow: none !important;
         background: #ffffff !important;
         color: #000000 !important;
         display: flex !important;
+        flex-direction: row !important;
         align-items: center !important;
-        gap: 2mm !important;
+        gap: 1.6mm !important;
+        transform: none !important;
+        zoom: 1 !important;
+        page-break-before: avoid !important;
+        break-before: avoid !important;
         page-break-inside: avoid !important;
         break-inside: avoid !important;
         page-break-after: always !important;
@@ -1168,8 +1310,8 @@ body.modal-open {
     }
 
     #print_standalone_zone .label-qr-col {
-        width: 24mm !important;
-        height: 24mm !important;
+        width: 25mm !important;
+        height: 25mm !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
@@ -1178,8 +1320,8 @@ body.modal-open {
 
     #print_standalone_zone .label-qr-col img,
     #print_standalone_zone .label-qr-col svg {
-        width: 24mm !important;
-        height: 24mm !important;
+        width: 25mm !important;
+        height: 25mm !important;
         display: block !important;
         image-rendering: pixelated !important;
         image-rendering: crisp-edges !important;
@@ -1187,8 +1329,9 @@ body.modal-open {
 
     #print_standalone_zone .label-text-col {
         flex: 1 !important;
-        height: 26mm !important;
-        max-height: 26mm !important;
+        min-width: 0 !important;
+        height: 26.5mm !important;
+        max-height: 26.5mm !important;
         display: flex !important;
         flex-direction: column !important;
         justify-content: space-between !important;
@@ -1234,6 +1377,132 @@ body.modal-open {
         letter-spacing: 0.5px !important;
         border-top: 1px solid #000000 !important;
         padding-top: 0.8mm !important;
+        color: #000000 !important;
+    }
+
+    /* =========================================================
+       KHỔ TEM LỚN 80 × 100 / 100 × 80 / 110 × 80 MM (LANDSCAPE NGANG)
+       Đảm bảo 1 tem = 1 trang, tận dụng tối đa diện tích tem, không trang trắng
+       ========================================================= */
+    #print_standalone_zone.label-size-110x80 {
+        width: 104mm !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .box-label-item {
+        width: 104mm !important;
+        max-width: 104mm !important;
+        height: 76mm !important;
+        max-height: 76mm !important;
+        margin: 0 !important;
+        padding: 2mm 2mm !important;
+        box-sizing: border-box !important;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 2.2mm !important;
+        transform: none !important;
+        zoom: 1 !important;
+        page-break-before: avoid !important;
+        break-before: avoid !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        overflow: hidden !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .box-label-item:last-child {
+        page-break-after: avoid !important;
+        break-after: avoid !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .label-qr-col {
+        width: 58mm !important;
+        height: 58mm !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        flex-shrink: 0 !important;
+        margin: 0 !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .label-qr-col img,
+    #print_standalone_zone.label-size-110x80 .label-qr-col svg {
+        width: 58mm !important;
+        height: 58mm !important;
+        display: block !important;
+        image-rendering: pixelated !important;
+        image-rendering: crisp-edges !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .label-text-col {
+        flex: 1 !important;
+        min-width: 0 !important;
+        height: 72mm !important;
+        max-height: 72mm !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: space-between !important;
+        overflow: hidden !important;
+        color: #000000 !important;
+        line-height: 1.15 !important;
+        text-align: left !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .label-line-1 {
+        font-size: 16.5pt !important;
+        font-weight: 900 !important;
+        text-align: left !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        color: #000000 !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .label-line-2 {
+        font-size: 14.5pt !important;
+        font-weight: 800 !important;
+        text-align: left !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        color: #000000 !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .label-line-3 {
+        font-size: 14pt !important;
+        font-weight: 900 !important;
+        text-align: left !important;
+        letter-spacing: 2px !important;
+        color: #000000 !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .label-line-4 {
+        font-size: 12.5pt !important;
+        font-weight: 700 !important;
+        text-align: left !important;
+        white-space: normal !important;
+        display: -webkit-box !important;
+        -webkit-line-clamp: 2 !important;
+        -webkit-box-orient: vertical !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        line-height: 1.15 !important;
+        color: #000000 !important;
+    }
+
+    #print_standalone_zone.label-size-110x80 .label-line-5 {
+        font-size: 16.5pt !important;
+        font-weight: 900 !important;
+        letter-spacing: 0.4px !important;
+        text-align: left !important;
+        border-top: 2.5px solid #000000 !important;
+        padding-top: 1.8mm !important;
+        margin-top: 0 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
         color: #000000 !important;
     }
 

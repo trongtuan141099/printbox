@@ -11,6 +11,7 @@ requireRole(['admin', 'editor']);
 $pdo = getDbConnection();
 $connectedPrinters = getConnectedPrinters();
 $defaultPrinter    = getDefaultPrinter($pdo);
+$defaultLabelSize  = getDefaultLabelSize($pdo);
 $prefillSlip = trim($_GET['slip'] ?? '');
 ?>
 
@@ -18,7 +19,7 @@ $prefillSlip = trim($_GET['slip'] ?? '');
     <div>
         <h1 class="page-title">🏷️ Nhập Liệu In Tem Thùng</h1>
         <p style="color:var(--text-muted);font-size:14px;margin-top:2px;">
-            Nhập hoặc quét mã chỉ thị &bull; Tự động tính số thùng &bull; Tự động sinh mã QR &bull; In nhãn 65x30mm
+            Nhập hoặc quét mã chỉ thị &bull; Tự động tính số thùng &bull; Tự động sinh mã QR &bull; Tự động in nhãn 65&times;30mm / 110&times;80mm (Ngang)
         </p>
     </div>
     <div class="page-actions">
@@ -147,6 +148,29 @@ $prefillSlip = trim($_GET['slip'] ?? '');
                     </div>
                 </div>
 
+                <!-- KÍCH THƯỚC TEM IN & CHẾ ĐỘ IN -->
+                <div class="form-group">
+                    <label class="form-label fw-bold">📐 Kích Thước Tem In</label>
+                    <select id="input_label_size_select" class="form-select border-primary fw-bold" onchange="onEntryLabelSizeChange(this.value)">
+                        <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang) - Mặc định xưởng</option>
+                        <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (80 × 100 / 100 × 80 / 110 × 80 mm - Ngang)</option>
+                    </select>
+                </div>
+
+                <div class="form-group" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+                    <label class="form-label fw-bold mb-1">⚡ Chế Độ Xuất Lệnh In</label>
+                    <div style="display:flex;gap:20px;align-items:center;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;color:#15803d;">
+                            <input type="radio" name="entry_print_mode" value="direct" checked>
+                            🖨️ In trực tiếp (Tự động gửi lệnh in)
+                        </label>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;color:#475569;">
+                            <input type="radio" name="entry_print_mode" value="preview">
+                            👁️ Xem trước (Preview)
+                        </label>
+                    </div>
+                </div>
+
                 <!-- GHI CHÚ BỔ SUNG -->
                 <div class="form-group">
                     <label class="form-label">Ghi Chú Đợt In (Tùy chọn)</label>
@@ -207,15 +231,15 @@ $prefillSlip = trim($_GET['slip'] ?? '');
                     </div>
                 </div>
 
-                <!-- XEM TRƯỚC MẪU TEM 65x30MM -->
+                <!-- XEM TRƯỚC MẪU TEM -->
                 <div style="margin-top:20px;">
                     <div style="font-weight:700;margin-bottom:8px;font-size:14px;color:#334155;">
-                        👁️ Mẫu nhãn in tem thùng (Kích thước 65mm &times; 30mm):
+                        👁️ Mẫu nhãn in tem thùng (<span id="entry_mock_size_txt"><?= ($defaultLabelSize === '110x80') ? '110mm × 80mm - Ngang' : '65mm × 30mm - Ngang' ?></span>):
                     </div>
-                    <div style="display:flex;justify-content:center;background:#e2e8f0;padding:12px;border-radius:8px;">
-                        <div class="box-label-item" style="box-shadow:0 1px 3px rgba(0,0,0,0.2);">
+                    <div style="display:flex;justify-content:center;background:#e2e8f0;padding:12px;border-radius:8px;overflow-x:auto;">
+                        <div id="entry_mock_label_box" class="box-label-item label-size-<?= $defaultLabelSize ?>" style="box-shadow:0 1px 3px rgba(0,0,0,0.2);">
                             <div class="label-qr-col">
-                                <div style="width:23mm;height:23mm;border:1px dashed #94a3b8;display:flex;align-items:center;justify-content:center;font-size:9px;color:#64748b;text-align:center;">
+                                <div style="width:100%;height:100%;border:1px dashed #94a3b8;display:flex;align-items:center;justify-content:center;font-size:9px;color:#64748b;text-align:center;">
                                     Mã QR<br>SMC4
                                 </div>
                             </div>
@@ -399,17 +423,119 @@ function openModal(id) {
 function closeModal(id, forceClose = false) {
     const el = document.getElementById(id);
     if (!el) return;
-    if (id === 'modal_print_result' && el.classList.contains('active') && !forceClose) {
-        if (!window.confirm('Bạn có chắc chắn đã in rồi hay không?')) {
-            return;
-        }
-    }
     el.classList.remove('active');
 }
 
+let activeEntryLabelSize = '<?= $defaultLabelSize ?>';
+
+function normalizeEntrySize(size) {
+    const s = String(size || '').trim().toLowerCase();
+    if (s === '110x80' || s === '80x110' || s === '100x80' || s === '80x100') {
+        return '110x80';
+    }
+    return '65x30';
+}
+
+function detectEntrySizeFromPrinter(printerName) {
+    const name = String(printerName || '').toLowerCase();
+    if (/(80\s*x\s*110|110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/.test(name)) {
+        return '110x80';
+    }
+    if (/65\s*x\s*30/.test(name)) {
+        return '65x30';
+    }
+    return null;
+}
+
+function getEntryLabelSize() {
+    const sel = document.getElementById('input_label_size_select');
+    if (sel && sel.value) {
+        return normalizeEntrySize(sel.value);
+    }
+    return normalizeEntrySize(activeEntryLabelSize);
+}
+
+function getEntryPrintMode() {
+    const r = document.querySelector('input[name="entry_print_mode"]:checked');
+    return (r && r.value === 'preview') ? 'preview' : 'direct';
+}
+
+function applyEntryPrintPageStyle(size) {
+    size = normalizeEntrySize(size);
+    let styleEl = document.getElementById('dynamic_print_page_style');
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'dynamic_print_page_style';
+        document.head.appendChild(styleEl);
+    }
+    if (size === '110x80') {
+        styleEl.textContent = `
+            @page { size: 104mm 80mm !important; margin: 0mm !important; }
+            @media print {
+                html, body { width: 104mm !important; height: auto !important; min-height: 0 !important; display: block !important; margin: 0 !important; padding: 0 !important; transform: none !important; zoom: 1 !important; scale: 1 !important; }
+                #print_standalone_zone { width: 104mm !important; margin: 0 !important; padding: 0 !important; transform: none !important; zoom: 1 !important; }
+            }
+        `;
+    } else {
+        styleEl.textContent = `
+            @page { size: 65mm 30mm !important; margin: 0mm !important; }
+            @media print {
+                html, body { width: 65mm !important; height: auto !important; min-height: 0 !important; display: block !important; margin: 0 !important; padding: 0 !important; transform: none !important; zoom: 1 !important; scale: 1 !important; }
+                #print_standalone_zone { width: 65mm !important; margin: 0 !important; padding: 0 !important; transform: none !important; zoom: 1 !important; }
+            }
+        `;
+    }
+}
+
+function onEntryLabelSizeChange(size) {
+    size = normalizeEntrySize(size);
+    activeEntryLabelSize = size;
+    const sel = document.getElementById('input_label_size_select');
+    if (sel && sel.value !== size) {
+        sel.value = size;
+    }
+    try { localStorage.setItem('printbox_default_label_size', size); } catch (e) {}
+    applyEntryPrintPageStyle(size);
+
+    const mockBox = document.getElementById('entry_mock_label_box');
+    if (mockBox) {
+        mockBox.classList.remove('label-size-65x30', 'label-size-110x80');
+        mockBox.classList.add('label-size-' + size);
+    }
+    const mockTxt = document.getElementById('entry_mock_size_txt');
+    if (mockTxt) {
+        mockTxt.innerText = (size === '110x80') ? '80 × 100 / 100 × 80 mm - Ngang' : '65mm × 30mm - Ngang';
+    }
+
+    const fd = new FormData();
+    fd.append('action', 'save_default_label_size');
+    fd.append('label_size', size);
+    fetch('orders.php', { method: 'POST', body: fd }).catch(() => {});
+}
+
+(function initEntryDefaultSize() {
+    const pSel = document.getElementById('input_printer_select');
+    const matched = pSel ? detectEntrySizeFromPrinter(pSel.value) : null;
+    if (matched) {
+        activeEntryLabelSize = matched;
+    }
+    const sel = document.getElementById('input_label_size_select');
+    if (sel && sel.value !== activeEntryLabelSize) {
+        sel.value = activeEntryLabelSize;
+    }
+    applyEntryPrintPageStyle(activeEntryLabelSize);
+})();
+
 function onEntryPrinterChange(printerName) {
     if (!printerName) return;
-    try { localStorage.setItem('mes_default_printer', printerName); } catch (e) {}
+    try {
+        localStorage.setItem('printbox_default_printer', printerName);
+        localStorage.setItem('mes_default_printer', printerName);
+    } catch (e) {}
+    const matchedSize = detectEntrySizeFromPrinter(printerName);
+    if (matchedSize && matchedSize !== getEntryLabelSize()) {
+        onEntryLabelSizeChange(matchedSize);
+    }
     const fd = new FormData();
     fd.append('action', 'save_default_printer');
     fd.append('printer_name', printerName);
@@ -586,10 +712,145 @@ function recalculate() {
     }
 }
 
-// BƯỚC 3: XỬ LÝ NÚT BẤM "NHẬP" -> KIỂM TRA ĐỊNH MỨC & MỞ HỘP THOẠI XÁC NHẬN
+// BƯỚC 3 & 4: KIỂM TRA DỮ LIỆU TRƯỚC KHI IN & TỰ ĐỘNG GỬI LỆNH IN
+function validateEntryPrePrint() {
+    const errors = [];
+    if (!currentOrder) {
+        errors.push('Chưa chọn Chỉ Thị Sản Xuất.');
+    } else {
+        if (!currentOrder.order_code || String(currentOrder.order_code).trim() === '') {
+            errors.push('Thiếu Mã CTSX (Lot No).');
+        }
+        if (!currentOrder.product_code || String(currentOrder.product_code).trim() === '') {
+            errors.push('Thiếu Mã sản phẩm.');
+        }
+    }
+    if (!currentCalculation || !currentCalculation.printQty || currentCalculation.printQty <= 0 || !currentCalculation.totalBoxes || currentCalculation.totalBoxes <= 0) {
+        errors.push('Số lượng tem sản phẩm / số thùng không hợp lệ (phải lớn hơn 0).');
+    }
+    const printerSelect = document.getElementById('input_printer_select');
+    const selectedPrinter = printerSelect ? printerSelect.value.trim() : '';
+    if (!selectedPrinter) {
+        errors.push('Chưa chọn Máy in tem.');
+    }
+    const selectedSize = getEntryLabelSize();
+    if (selectedSize !== '65x30' && selectedSize !== '110x80') {
+        errors.push('Kích thước tem không hợp lệ.');
+    }
+    return {
+        valid: errors.length === 0,
+        errors: errors,
+        printer: selectedPrinter,
+        labelSize: selectedSize
+    };
+}
+
+function executeEntryPrintSubmission() {
+    const check = validateEntryPrePrint();
+    if (!check.valid) {
+        alert('LỖI DỮ LIỆU TRƯỚC KHI IN:\n- ' + check.errors.join('\n- '));
+        return;
+    }
+
+    const btnStep = document.getElementById('btn_submit_step');
+    const btnFinal = document.getElementById('btn_final_submit');
+    if (btnStep) {
+        btnStep.disabled = true;
+        btnStep.innerText = '⏳ ĐANG TỰ ĐỘNG SINH TEM & GỬI LỆNH IN...';
+    }
+    if (btnFinal) {
+        btnFinal.disabled = true;
+        btnFinal.innerText = '⏳ Đang lưu & gửi lệnh in...';
+    }
+
+    const formData = new FormData();
+    formData.append('order_id', currentOrder.id);
+    formData.append('print_qty', currentCalculation.printQty);
+    formData.append('is_odd_box', (currentCalculation.hasOdd && document.getElementById('chk_is_odd_box').checked) ? 1 : 0);
+    formData.append('admin_msnv', verifiedAdminMsnv || '');
+    formData.append('admin_pass', verifiedAdminPass || '');
+    formData.append('override_reason', verifiedOverrideReason || '');
+    formData.append('printer_name', check.printer);
+    formData.append('label_size', check.labelSize);
+    formData.append('print_mode', getEntryPrintMode());
+    formData.append('note', document.getElementById('input_note').value.trim());
+
+    fetch('ajax/submit_print.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (btnStep) {
+            btnStep.disabled = false;
+            btnStep.innerText = '📥 XÁC NHẬN NHẬP & IN TEM THÙNG';
+        }
+        if (btnFinal) {
+            btnFinal.disabled = false;
+            btnFinal.innerText = '✅ ĐỒNG Ý NHẬP & IN NGAY';
+        }
+
+        if (!data.success) {
+            if (data.require_admin) {
+                closeModal('modal_confirm', true);
+                verifiedAdminMsnv = null;
+                verifiedAdminPass = null;
+                verifiedOverrideReason = null;
+                document.getElementById('modal_req_qty').innerText = (data.print_qty || currentCalculation.printQty).toLocaleString();
+                document.getElementById('modal_rem_qty').innerText = (data.remaining_qty !== undefined ? data.remaining_qty : currentOrder.remaining_qty).toLocaleString();
+                document.getElementById('modal_diff_qty').innerText = '+' + ((data.excess_qty !== undefined ? data.excess_qty : (currentCalculation.printQty - currentOrder.remaining_qty))).toLocaleString() + ' con';
+                document.getElementById('input_admin_msnv').value = '';
+                document.getElementById('input_admin_pass').value = '';
+                document.getElementById('input_override_reason').value = '';
+                document.getElementById('admin_verify_feedback').innerText = data.message;
+                document.getElementById('admin_verify_feedback').style.color = '#b91c1c';
+                openModal('modal_admin_approval');
+            } else if (data.require_odd_confirm) {
+                closeModal('modal_confirm', true);
+                alert(data.message);
+                document.getElementById('chk_is_odd_box').focus();
+            } else {
+                alert('Lỗi: ' + data.message);
+            }
+            return;
+        }
+
+        if (!Array.isArray(data.labels) || data.labels.length === 0) {
+            alert('Lỗi dữ liệu in: Không sinh được danh sách tem QR!');
+            return;
+        }
+
+        closeModal('modal_confirm', true);
+        renderPrintedLabels(data.labels);
+        document.getElementById('res_box_count').innerText = data.labels.length;
+
+        if (getEntryPrintMode() === 'preview') {
+            openModal('modal_print_result');
+        } else if (data.direct_printed) {
+            resetFormForNext();
+        } else {
+            triggerDirectPrint(() => {
+                resetFormForNext();
+            });
+        }
+    })
+    .catch(err => {
+        if (btnStep) {
+            btnStep.disabled = false;
+            btnStep.innerText = '📥 XÁC NHẬN NHẬP & IN TEM THÙNG';
+        }
+        if (btnFinal) {
+            btnFinal.disabled = false;
+            btnFinal.innerText = '✅ ĐỒNG Ý NHẬP & IN NGAY';
+        }
+        alert('Lỗi gửi dữ liệu: ' + err.message);
+    });
+}
+
 document.getElementById('btn_submit_step').addEventListener('click', function() {
-    if (!currentOrder || !currentCalculation) {
-        alert('Vui lòng tra cứu chỉ thị và nhập số lượng tem sản phẩm hợp lệ!');
+    const check = validateEntryPrePrint();
+    if (!check.valid) {
+        alert('VUI LÒNG KIỂM TRA DỮ LIỆU TRƯỚC KHI IN:\n- ' + check.errors.join('\n- '));
         return;
     }
 
@@ -616,35 +877,8 @@ document.getElementById('btn_submit_step').addEventListener('click', function() 
         return;
     }
 
-    const printerSelect = document.getElementById('input_printer_select');
-    const selectedPrinter = printerSelect ? printerSelect.value : 'Standard Label Printer (65x30mm)';
-    const cfPrinterEl = document.getElementById('cf_printer_name');
-    if (cfPrinterEl) cfPrinterEl.innerText = selectedPrinter;
-
-    // Hiển thị hộp thoại xác nhận trước khi thao tác
-    document.getElementById('cf_slip_code').innerText = currentOrder.slip_code;
-    document.getElementById('cf_order_code').innerText = currentOrder.order_code;
-    document.getElementById('cf_product_code').innerText = currentOrder.product_code;
-    document.getElementById('cf_print_qty').innerText = printQty.toLocaleString() + ' con';
-    document.getElementById('cf_pack_qty').innerText = currentOrder.pack_qty + ' con/thùng';
-    document.getElementById('cf_box_count').innerText = currentCalculation.totalBoxes + ' TEM';
-
-    if (currentCalculation.hasOdd) {
-        document.getElementById('cf_row_odd').style.display = 'table-row';
-        document.getElementById('cf_odd_desc').innerText = 
-            currentCalculation.fullBoxes + ' thùng chẵn (' + currentOrder.pack_qty + ' con) + 1 thùng lẻ (' + currentCalculation.remainder + ' con)';
-    } else {
-        document.getElementById('cf_row_odd').style.display = 'none';
-    }
-
-    if (printQty > remaining) {
-        document.getElementById('cf_row_over').style.display = 'table-row';
-        document.getElementById('cf_over_desc').innerText = 'Người duyệt: ' + verifiedAdminMsnv + ' | Lý do: ' + verifiedOverrideReason;
-    } else {
-        document.getElementById('cf_row_over').style.display = 'none';
-    }
-
-    openModal('modal_confirm');
+    // Tự động sinh tem và gửi lệnh in ngay sau khi nhấn "Xác nhận nhập và in tem"
+    executeEntryPrintSubmission();
 });
 
 // XÁC THỰC MSNV, MẬT KHẨU & LÝ DO ADMIN/EDITOR DUYỆT VƯỢT MỨC
@@ -694,10 +928,9 @@ document.getElementById('btn_verify_and_proceed').addEventListener('click', func
             verifiedOverrideReason = overrideReason;
             
             setTimeout(() => {
-                closeModal('modal_admin_approval');
-                // Tự động mở hộp thoại xác nhận
-                document.getElementById('btn_submit_step').click();
-            }, 400);
+                closeModal('modal_admin_approval', true);
+                executeEntryPrintSubmission();
+            }, 250);
         } else {
             fb.style.color = '#b91c1c';
             fb.innerText = '✗ ' + data.message;
@@ -715,88 +948,32 @@ document.getElementById('btn_verify_and_proceed').addEventListener('click', func
     });
 });
 
-// BƯỚC 4: GỬI AJAX LƯU LỊCH SỬ & SINH TEM THÙNG CHÍNH THỨC
 document.getElementById('btn_final_submit').addEventListener('click', function() {
-    const btn = document.getElementById('btn_final_submit');
-    btn.disabled = true;
-    btn.innerText = '⏳ Đang lưu & sinh mã QR...';
-
-    const printerSelect = document.getElementById('input_printer_select');
-    const selectedPrinter = printerSelect ? printerSelect.value : 'Standard Label Printer (65x30mm)';
-
-    const formData = new FormData();
-    formData.append('order_id', currentOrder.id);
-    formData.append('print_qty', currentCalculation.printQty);
-    formData.append('is_odd_box', (currentCalculation.hasOdd && document.getElementById('chk_is_odd_box').checked) ? 1 : 0);
-    formData.append('admin_msnv', verifiedAdminMsnv || '');
-    formData.append('admin_pass', verifiedAdminPass || '');
-    formData.append('override_reason', verifiedOverrideReason || '');
-    formData.append('printer_name', selectedPrinter);
-    formData.append('note', document.getElementById('input_note').value.trim());
-
-    fetch('ajax/submit_print.php', {
-        method: 'POST',
-        body: formData
-    })
-    .then(res => res.json())
-    .then(data => {
-        btn.disabled = false;
-        btn.innerText = '✅ ĐỒNG Ý NHẬP & IN NGAY';
-
-        if (!data.success) {
-            if (data.require_admin) {
-                closeModal('modal_confirm');
-                verifiedAdminMsnv = null;
-                verifiedAdminPass = null;
-                verifiedOverrideReason = null;
-                document.getElementById('modal_req_qty').innerText = (data.print_qty || currentCalculation.printQty).toLocaleString();
-                document.getElementById('modal_rem_qty').innerText = (data.remaining_qty !== undefined ? data.remaining_qty : currentOrder.remaining_qty).toLocaleString();
-                document.getElementById('modal_diff_qty').innerText = '+' + ((data.excess_qty !== undefined ? data.excess_qty : (currentCalculation.printQty - currentOrder.remaining_qty))).toLocaleString() + ' con';
-                document.getElementById('input_admin_msnv').value = '';
-                document.getElementById('input_admin_pass').value = '';
-                document.getElementById('input_override_reason').value = '';
-                document.getElementById('admin_verify_feedback').innerText = data.message;
-                document.getElementById('admin_verify_feedback').style.color = '#b91c1c';
-                openModal('modal_admin_approval');
-            } else if (data.require_odd_confirm) {
-                closeModal('modal_confirm');
-                alert(data.message);
-                document.getElementById('chk_is_odd_box').focus();
-            } else {
-                alert('Lỗi: ' + data.message);
-            }
-            return;
-        }
-
-        // Đóng hộp thoại xác nhận
-        closeModal('modal_confirm');
-
-        // Hiển thị danh sách tem đã sinh
-        renderPrintedLabels(data.labels);
-        document.getElementById('res_box_count').innerText = data.labels.length;
-
-        // Mở modal in tem và tự động gửi lệnh in ra máy in mặc định
-        openModal('modal_print_result');
-        setTimeout(() => {
-            triggerDirectPrint();
-        }, 250);
-    })
-    .catch(err => {
-        btn.disabled = false;
-        btn.innerText = '✅ ĐỒNG Ý NHẬP & IN NGAY';
-        alert('Lỗi gửi dữ liệu: ' + err.message);
-    });
+    executeEntryPrintSubmission();
 });
 
-// RENDER DANH SÁCH TEM THÙNG ĐỂ IN (CHUẨN 65x30MM)
+// RENDER DANH SÁCH TEM THÙNG ĐỂ IN (CHUẨN 65x30MM & 110x80MM NGANG)
 function renderPrintedLabels(labels) {
-    const container = document.getElementById('printable_labels_container');
-    container.innerHTML = '';
+    const currentSize = getEntryLabelSize();
+    applyEntryPrintPageStyle(currentSize);
 
-    labels.forEach((item, index) => {
-        const div = document.createElement('div');
-        div.className = 'box-label-item';
-        div.innerHTML = `
+    const container = document.getElementById('printable_labels_container');
+    if (container) {
+        container.className = 'label-preview-wrapper label-size-' + currentSize;
+        container.innerHTML = '';
+    }
+
+    let standaloneZone = document.getElementById('print_standalone_zone');
+    if (!standaloneZone) {
+        standaloneZone = document.createElement('div');
+        standaloneZone.id = 'print_standalone_zone';
+        document.body.appendChild(standaloneZone);
+    }
+    standaloneZone.className = 'print-standalone-zone label-size-' + currentSize;
+    standaloneZone.innerHTML = '';
+
+    labels.forEach((item) => {
+        const labelHtml = `
             <div class="label-qr-col">
                 <img src="${item.qr_base64}" alt="QR">
             </div>
@@ -808,13 +985,41 @@ function renderPrintedLabels(labels) {
                 <div class="label-line-5">${escapeHtml(item.box_no)}</div>
             </div>
         `;
-        container.appendChild(div);
+        if (container) {
+            const div = document.createElement('div');
+            div.className = 'box-label-item label-size-' + currentSize;
+            div.innerHTML = labelHtml;
+            container.appendChild(div);
+        }
+        const printDiv = document.createElement('div');
+        printDiv.className = 'box-label-item label-size-' + currentSize;
+        printDiv.innerHTML = labelHtml;
+        standaloneZone.appendChild(printDiv);
     });
 }
 
-// IN TRỰC TIẾP RA MÁY IN MẠNG / IN TRÌNH DUYỆT
-function triggerDirectPrint() {
-    window.print();
+// IN TRỰC TIẾP RA MÁY IN MẠNG / IN TRÌNH DUYỆT (CHỜ QR RENDER HOÀN TẤT TRƯỚC KHI IN)
+function triggerDirectPrint(onAfterPrint) {
+    applyEntryPrintPageStyle(getEntryLabelSize());
+    const standaloneZone = document.getElementById('print_standalone_zone');
+    const imgs = standaloneZone ? Array.from(standaloneZone.querySelectorAll('img')) : [];
+    const waitPromises = imgs.map(img => {
+        if (img.complete && img.naturalHeight !== 0) return Promise.resolve();
+        if (img.decode) return img.decode().catch(() => Promise.resolve());
+        return new Promise(resolve => { img.onload = resolve; img.onerror = resolve; });
+    });
+    Promise.all(waitPromises).then(() => {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    window.print();
+                    if (typeof onAfterPrint === 'function') {
+                        onAfterPrint();
+                    }
+                }, 120);
+            });
+        });
+    });
 }
 
 // TIẾP TỤC ĐƠN KHÁC

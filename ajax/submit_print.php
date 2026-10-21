@@ -51,6 +51,35 @@ if (empty($printerDestination)) {
     saveDefaultPrinter($printerDestination, $pdo);
 }
 
+if (empty($printerDestination)) {
+    echo json_encode(['success' => false, 'message' => 'Lỗi cấu hình in: Vui lòng chọn máy in trước khi thực hiện in tem!']);
+    exit;
+}
+
+$labelSize = strtolower(trim($_POST['label_size'] ?? ''));
+if (in_array($labelSize, ['80x110', '100x80', '80x100'], true)) {
+    $labelSize = '110x80';
+}
+if (empty($labelSize)) {
+    $labelSize = getDefaultLabelSize($pdo);
+}
+// Auto-match label size if printer name explicitly indicates 80x110 / 110x80 / 80x100 / 100x80
+if (preg_match('/(80\s*x\s*110|110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/i', $printerDestination)) {
+    $labelSize = '110x80';
+} elseif (preg_match('/65\s*x\s*30/i', $printerDestination)) {
+    $labelSize = '65x30';
+}
+if (!in_array($labelSize, ['65x30', '110x80'], true)) {
+    echo json_encode(['success' => false, 'message' => 'Lỗi cấu hình in: Kích thước tem không hợp lệ (hỗ trợ 65x30mm hoặc 80x100mm / 100x80mm / 110x80mm)!']);
+    exit;
+}
+saveDefaultLabelSize($labelSize, $pdo);
+
+$printMode = strtolower(trim($_POST['print_mode'] ?? 'direct'));
+if (!in_array($printMode, ['direct', 'preview'], true)) {
+    $printMode = 'direct';
+}
+
 try {
     $pdo->beginTransaction();
 
@@ -62,6 +91,18 @@ try {
     if (!$order) {
         $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => 'Không tìm thấy dữ liệu chỉ thị!']);
+        exit;
+    }
+
+    if (empty(trim((string)($order['order_code'] ?? '')))) {
+        $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => 'Dữ liệu không hợp lệ: Chỉ thị thiếu Mã CTSX (Lot No)!']);
+        exit;
+    }
+
+    if (empty(trim((string)($order['product_code'] ?? '')))) {
+        $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => 'Dữ liệu không hợp lệ: Chỉ thị thiếu Mã sản phẩm!']);
         exit;
     }
 
@@ -273,8 +314,8 @@ try {
             $sampleQrContent = $qrContent;
         }
 
-        // Sinh ảnh QR offline dạng Base64 (độ phân giải cao, margin 4 chuẩn ISO cho camera quét nhanh)
-        $qrBase64 = generateQrDataUri($qrContent, 6, 4);
+        // Sinh ảnh QR offline dạng Base64 (độ phân giải cao pixelSize=8, margin=1 giúp phóng lớn QR tối đa và quét ổn định)
+        $qrBase64 = generateQrDataUri($qrContent, 8, 1);
 
         // Lưu vào CSDL
         $stmtLabel->execute([
@@ -304,11 +345,36 @@ try {
         ];
     }
 
+    // Kiểm tra toàn diện dữ liệu trước khi hoàn tất và gửi lệnh in (Mã CTSX, Mã SP, QR Code, Số lượng tem, Máy in, Kích thước tem)
+    $validation = validatePrintJobData([
+        'order_code'   => $order['order_code'],
+        'product_code' => $order['product_code'],
+        'printer_name' => $printerDestination,
+        'label_size'   => $labelSize,
+        'label_count'  => $totalBoxes,
+        'labels'       => $labels
+    ]);
+
+    if (!$validation['valid']) {
+        $pdo->rollBack();
+        echo json_encode([
+            'success' => false,
+            'message' => $validation['message']
+        ]);
+        exit;
+    }
+
     // Cập nhật mẫu QR vào lịch sử
     $pdo->prepare("UPDATE `print_history` SET `qr_data_sample` = ? WHERE `id` = ?")->execute([$sampleQrContent, $historyId]);
 
     // Commit Transaction
     $pdo->commit();
+
+    // Tự động gửi lệnh in trực tiếp tới máy in đã chọn nếu ở chế độ In trực tiếp (direct)
+    $directPrintRes = ['success' => false, 'message' => '', 'pages_printed' => 0];
+    if ($printMode !== 'preview') {
+        $directPrintRes = dispatchWindowsDirectPrint($labels, $printerDestination, $labelSize);
+    }
 
     // Ghi log kiểm toán in tem chi tiết ra file logs/print_audit.log
     try {
@@ -321,7 +387,7 @@ try {
         $lastBox  = $boxNumbers[$totalBoxes - 1] ?? 'N/A';
         $boxSummaryStr = ($totalBoxes > 1) ? "{$firstBox} -> {$lastBox}" : $firstBox;
         $logLine = sprintf(
-            "[%s] PRINT_DISPATCHED | User: %s (%s) | Slip: %s | Lot: %s | Product: %s | Qty: %d pcs | Boxes: %d [%s] | Printer: %s | Status: SUCCESS\n",
+            "[%s] PRINT_DISPATCHED | User: %s (%s) | Slip: %s | Lot: %s | Product: %s | Qty: %d pcs | Boxes: %d [%s] | Size: %s Landscape | Printer: %s | DirectSpooler: %s | Status: SUCCESS\n",
             date('Y-m-d H:i:s'),
             $currentUser['full_name'],
             $currentUser['employee_code'],
@@ -331,7 +397,9 @@ try {
             $printQty,
             $totalBoxes,
             $boxSummaryStr,
-            $printerDestination
+            $labelSize,
+            $printerDestination,
+            !empty($directPrintRes['success']) ? 'YES' : 'NO'
         );
         @file_put_contents($logFile, $logLine, FILE_APPEND | LOCK_EX);
     } catch (Exception $logEx) {
@@ -341,7 +409,7 @@ try {
 
     echo json_encode([
         'success'             => true,
-        'message'             => 'Đã nhập liệu thành công và sinh ' . $totalBoxes . ' tem thùng!' . ($isOverTarget ? " (Đã duyệt vượt mức bởi {$approvedByMsnv})" : ''),
+        'message'             => 'Đã nhập liệu thành công, sinh ' . $totalBoxes . ' tem thùng (' . $labelSize . 'mm Ngang) và tự động gửi lệnh in tới máy in ' . $printerDestination . '!' . ($isOverTarget ? " (Đã duyệt vượt mức bởi {$approvedByMsnv})" : ''),
         'history_id'          => $historyId,
         'box_count'           => $totalBoxes,
         'new_printed'         => $newPrintedQty,
@@ -350,6 +418,10 @@ try {
         'approved_by'         => $approvedByMsnv,
         'approved_by_id'      => $approvedById,
         'printer_destination' => $printerDestination,
+        'label_size'          => $labelSize,
+        'print_mode'          => $printMode,
+        'direct_printed'      => !empty($directPrintRes['success']),
+        'direct_print_msg'    => $directPrintRes['message'] ?? '',
         'print_status'        => 'dispatched',
         'labels'              => $labels
     ]);

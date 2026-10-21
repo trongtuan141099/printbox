@@ -8,8 +8,8 @@ require_once __DIR__ . '/../libs/phpqrcode/qrlib.php';
 
 $text   = trim($_GET['text'] ?? $_POST['text'] ?? '');
 $format = strtolower(trim($_GET['format'] ?? $_POST['format'] ?? 'png'));
-$size   = max(1, min(20, (int)($_GET['size'] ?? $_POST['size'] ?? 6)));
-$margin = max(2, min(10, (int)($_GET['margin'] ?? $_POST['margin'] ?? 4)));
+$size   = max(1, min(20, (int)($_GET['size'] ?? $_POST['size'] ?? 8)));
+$margin = max(1, min(10, (int)($_GET['margin'] ?? $_POST['margin'] ?? 1)));
 
 if (empty($text)) {
     http_response_code(400);

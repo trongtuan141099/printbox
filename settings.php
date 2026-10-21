@@ -51,6 +51,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         updateSystemSetting('qr_date_format', $qrDateFormat, $pdo);
         updateSystemSetting('qr_fields', $qrFieldsJson, $pdo);
 
+        if (!empty($_POST['default_label_size'])) {
+            saveDefaultLabelSize($_POST['default_label_size'], $pdo);
+        }
         if (isset($_POST['label_width_mm'])) {
             updateSystemSetting('label_width_mm', (int)$_POST['label_width_mm'], $pdo);
         }
@@ -73,10 +76,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $printerName = trim($_POST['default_printer'] ?? '');
     if ($printerName !== '') {
         saveDefaultPrinter($printerName, $pdo);
-        setFlash('success', "Đã lưu máy in tem mặc định: {$printerName}!");
-    } else {
-        setFlash('warning', 'Vui lòng chọn máy in hợp lệ!');
     }
+    if (!empty($_POST['default_label_size'])) {
+        saveDefaultLabelSize($_POST['default_label_size'], $pdo);
+    }
+    setFlash('success', "Đã lưu thành công cấu hình máy in và khổ tem in mặc định!");
     header("Location: settings.php");
     exit;
 }
@@ -107,6 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 $forceRefreshPrinters = isset($_GET['refresh_printers']);
 $connectedPrinters = getConnectedPrinters($forceRefreshPrinters);
 $defaultPrinter = getDefaultPrinter($pdo, $forceRefreshPrinters);
+$defaultLabelSize = getDefaultLabelSize($pdo, $forceRefreshPrinters);
 $currentSettings = getSystemSettings($pdo, true);
 $activeFields = json_decode($currentSettings['qr_fields'] ?? '[]', true) ?: [];
 
@@ -146,7 +151,7 @@ $sampleQrStr = buildBoxQrContent([
     'order_no'      => '',
     'bundle_no'     => ''
 ], $pdo);
-$sampleQrImg = generateQrDataUri($sampleQrStr, 6, 4);
+$sampleQrImg = generateQrDataUri($sampleQrStr, 8, 1);
 
 // NẠP GIAO DIỆN HEADER (CHỈ GỌI KHI KHÔNG CÓ REDIRECT)
 $pageTitle = "Cấu Hình Hệ Thống & Mã QR";
@@ -180,14 +185,14 @@ require_once __DIR__ . '/includes/header.php';
                 </a>
             </div>
             <div class="card-body p-3">
-                <form method="POST" action="settings.php" id="printerSettingsForm" onsubmit="if(document.getElementById('settings_default_printer')) localStorage.setItem('printbox_default_printer', document.getElementById('settings_default_printer').value);">
+                <form method="POST" action="settings.php" id="printerSettingsForm" onsubmit="if(document.getElementById('settings_default_printer')) localStorage.setItem('printbox_default_printer', document.getElementById('settings_default_printer').value); if(document.getElementById('settings_default_label_size')) localStorage.setItem('printbox_default_label_size', document.getElementById('settings_default_label_size').value);">
                     <input type="hidden" name="action" value="save_printer_only">
                     <div class="row g-2 align-items-end">
-                        <div class="col-md-8">
+                        <div class="col-md-5">
                             <label class="form-label fw-bold small text-secondary mb-1">
-                                Máy In Tem Sử Dụng (Chỉ hiển thị máy in có kết nối thực tế với máy tính hiện tại)
+                                🖨️ Máy In Tem Sử Dụng
                             </label>
-                            <select name="default_printer" id="settings_default_printer" class="form-select fw-bold">
+                            <select name="default_printer" id="settings_default_printer" class="form-select fw-bold" onchange="onSettingsPrinterSelectChange(this.value)">
                                 <?php if (empty($connectedPrinters)): ?>
                                     <option value="<?= htmlspecialchars($defaultPrinter) ?>"><?= htmlspecialchars($defaultPrinter) ?></option>
                                 <?php else: ?>
@@ -200,13 +205,22 @@ require_once __DIR__ . '/includes/header.php';
                             </select>
                         </div>
                         <div class="col-md-4">
+                            <label class="form-label fw-bold small text-secondary mb-1">
+                                📐 Khổ Tem In Mặc Định
+                            </label>
+                            <select name="default_label_size" id="settings_default_label_size" class="form-select fw-bold" onchange="updateSettingsLabelPreview(this.value)">
+                                <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang)</option>
+                                <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (80 × 100 / 100 × 80 / 110 × 80 mm - Ngang)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
                             <button type="submit" class="btn btn-success w-100 fw-bold">
-                                💾 Lưu Máy In Mặc Định
+                                💾 Lưu Cấu Hình In
                             </button>
                         </div>
                     </div>
                     <div class="form-text small mt-1">
-                        Lựa chọn này được lưu làm mặc định cho các lần in sau. Khi bấm in ngay, lệnh in sẽ tự động gửi trực tiếp đến máy in mặc định này.
+                        Lựa chọn này được lưu làm mặc định cho các lần in sau. Khổ tem và máy in sẽ được đồng bộ tự động với màn hình Chỉ Thị Sản Xuất.
                     </div>
                 </form>
             </div>
@@ -328,11 +342,13 @@ require_once __DIR__ . '/includes/header.php';
                     </div>
                 </div>
 
-                <!-- MẪU TEM NHÃN 65x30MM -->
+                <!-- MẪU TEM NHÃN XEM TRƯỚC -->
                 <div class="text-start mt-4 pt-3 border-top">
-                    <label class="form-label fw-bold small text-secondary mb-2">Xem trước định dạng tem nhiệt (65mm &times; 30mm):</label>
-                    <div class="d-flex justify-content-center p-3 bg-secondary-subtle rounded-3">
-                        <div class="box-label-item" style="box-shadow: 0 4px 6px rgba(0,0,0,0.15);">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <label class="form-label fw-bold small text-secondary mb-0">Xem trước mẫu tem in (<span id="settings_preview_size_label"><?= ($defaultLabelSize === '110x80') ? '110mm × 80mm (Ngang)' : '65mm × 30mm (Ngang)' ?></span>):</label>
+                    </div>
+                    <div class="d-flex justify-content-center p-3 bg-secondary-subtle rounded-3" id="settings_preview_container">
+                        <div class="box-label-item <?= ($defaultLabelSize === '110x80') ? 'label-size-110x80' : 'label-size-65x30' ?>" id="settings_preview_box" style="box-shadow: 0 4px 6px rgba(0,0,0,0.15);">
                             <div class="label-qr-col">
                                 <img id="previewMiniQr" src="<?= $sampleQrImg ?>" alt="QR">
                             </div>
@@ -354,6 +370,27 @@ require_once __DIR__ . '/includes/header.php';
 
 <script>
 const availableDefs = <?= json_encode($availableFieldDefs, JSON_UNESCAPED_UNICODE) ?>;
+function onSettingsPrinterSelectChange(printerName) {
+    const name = String(printerName || '').toLowerCase();
+    const sizeSel = document.getElementById('settings_default_label_size');
+    if (!sizeSel) return;
+    if (/(80\s*x\s*110|110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/.test(name)) {
+        sizeSel.value = '110x80';
+        updateSettingsLabelPreview('110x80');
+    } else if (/65\s*x\s*30/.test(name)) {
+        sizeSel.value = '65x30';
+        updateSettingsLabelPreview('65x30');
+    }
+}
+
+function updateSettingsLabelPreview(size) {
+    const box = document.getElementById('settings_preview_box');
+    const lbl = document.getElementById('settings_preview_size_label');
+    if (!box) return;
+    box.classList.remove('label-size-65x30', 'label-size-110x80');
+    box.classList.add('label-size-' + size);
+    if (lbl) lbl.innerText = (size === '110x80') ? '80 × 100 / 100 × 80 mm (Ngang)' : '65mm × 30mm (Ngang)';
+}
 
 function addFieldSlot() {
     const container = document.getElementById('fieldsListContainer');

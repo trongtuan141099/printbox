@@ -399,11 +399,13 @@ function buildBoxQrContent(array $data, PDO $pdo = null) {
 
 /**
  * Sinh mã QR dạng Base64 Data URI (offline)
+ * Optimize margin = 1 & pixelSize = 8 to maximize QR area on label while preserving scan stability
  * @param string $text
  * @param int $pixelSize
+ * @param int $margin
  * @return string
  */
-function generateQrDataUri($text, $pixelSize = 6, $margin = 4) {
+function generateQrDataUri($text, $pixelSize = 8, $margin = 1) {
     return QRcode::base64($text, QRcode::QR_ECLEVEL_M, $pixelSize, $margin);
 }
 
@@ -609,9 +611,10 @@ function ensurePrintHistorySchema(PDO $pdo = null) {
 }
 
 /**
- * Lấy danh sách các máy in có kết nối thực tế (WorkOffline = false) với máy tính hiện tại
+ * Lấy danh sách các máy in được cài đặt và kết nối trên hệ thống Windows hiện tại
+ * Ưu tiên sắp xếp các máy in đang kết nối trực tuyến (WorkOffline = false) và máy in tem chuyên dụng lên đầu
  * @param bool $forceRefresh Bỏ qua cache để quét lại máy in
- * @return array Danh sách máy in [['name' => string, 'default' => bool, 'port' => string, 'status' => int]]
+ * @return array Danh sách máy in [['name' => string, 'default' => bool, 'port' => string, 'status' => int, 'online' => bool]]
  */
 function getConnectedPrinters($forceRefresh = false) {
     if (session_status() === PHP_SESSION_NONE) {
@@ -631,7 +634,7 @@ function getConnectedPrinters($forceRefresh = false) {
     $printers = [];
 
     if (stripos(PHP_OS_FAMILY, 'Windows') !== false && function_exists('shell_exec')) {
-        $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Printer -Filter \'WorkOffline = false\' | Select-Object Name, Default, WorkOffline, PrinterStatus, PortName | ConvertTo-Json -Compress" 2>nul';
+        $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Printer | Select-Object Name, Default, WorkOffline, PrinterStatus, PortName, DriverName | ConvertTo-Json -Compress" 2>nul';
         $output = @shell_exec($cmd);
         if (!empty($output)) {
             $decoded = json_decode(trim($output), true);
@@ -639,20 +642,52 @@ function getConnectedPrinters($forceRefresh = false) {
                 if (isset($decoded['Name'])) {
                     $decoded = [$decoded];
                 }
+                $onlineList  = [];
+                $offlineList = [];
                 foreach ($decoded as $item) {
                     if (!is_array($item) || empty($item['Name'])) continue;
-                    $workOffline = !empty($item['WorkOffline']);
-                    $printerStatus = (int)($item['PrinterStatus'] ?? 3);
-                    // Chỉ giữ các máy in kết nối thực tế (không bị Offline - status 7)
-                    if ($workOffline || $printerStatus === 7) continue;
+                    $pName = trim((string)$item['Name']);
+                    if (strcasecmp($pName, 'Fax') === 0) continue;
 
-                    $printers[] = [
-                        'name'    => trim((string)$item['Name']),
-                        'default' => !empty($item['Default']),
-                        'port'    => trim((string)($item['PortName'] ?? '')),
-                        'status'  => $printerStatus
+                    $workOffline   = !empty($item['WorkOffline']);
+                    $printerStatus = (int)($item['PrinterStatus'] ?? 3);
+                    $isOnline      = (!$workOffline && $printerStatus !== 7);
+                    $driverName    = trim((string)($item['DriverName'] ?? ''));
+                    $isThermal     = (
+                        stripos($pName, 'ZDesigner') !== false ||
+                        stripos($pName, 'Zebra') !== false ||
+                        stripos($pName, '65x30') !== false ||
+                        stripos($pName, '80x110') !== false ||
+                        stripos($pName, '110x80') !== false ||
+                        stripos($driverName, 'ZDesigner') !== false
+                    );
+
+                    $entry = [
+                        'name'       => $pName,
+                        'default'    => !empty($item['Default']),
+                        'port'       => trim((string)($item['PortName'] ?? '')),
+                        'status'     => $printerStatus,
+                        'online'     => $isOnline,
+                        'is_thermal' => $isThermal
                     ];
+
+                    if ($isOnline || $isThermal) {
+                        $onlineList[] = $entry;
+                    } else {
+                        $offlineList[] = $entry;
+                    }
                 }
+                // Prioritize thermal label printers & online printers first
+                usort($onlineList, function($a, $b) {
+                    if ($a['is_thermal'] !== $b['is_thermal']) {
+                        return $a['is_thermal'] ? -1 : 1;
+                    }
+                    if ($a['online'] !== $b['online']) {
+                        return $a['online'] ? -1 : 1;
+                    }
+                    return 0;
+                });
+                $printers = !empty($onlineList) ? $onlineList : $offlineList;
             }
         }
     }
@@ -740,3 +775,543 @@ function saveDefaultPrinter($printerName, PDO $pdo = null) {
     return true;
 }
 
+
+/**
+ * Normalize label size code: supports '65x30' and '110x80' (with aliases '80x110', '100x80', '80x100')
+ * @param string $size
+ * @return string '65x30' or '110x80'
+ */
+function normalizeLabelSize($size) {
+    $size = strtolower(trim((string)$size));
+    if (in_array($size, ['110x80', '80x110', '100x80', '80x100'], true)) {
+        return '110x80';
+    }
+    return '65x30';
+}
+
+/**
+ * Lấy khổ tem in mặc định ('65x30' hoặc '110x80')
+ * @param PDO|null $pdo
+ * @param bool $forceRefresh
+ * @return string
+ */
+function getDefaultLabelSize(PDO $pdo = null, $forceRefresh = false) {
+    if (session_status() === PHP_SESSION_NONE) {
+        @session_start();
+    }
+    if ($pdo === null) {
+        $pdo = getDbConnection();
+    }
+
+    // Check user session first
+    $userSize = strtolower(trim($_SESSION['default_label_size'] ?? ''));
+    if (in_array($userSize, ['110x80', '80x110', '100x80', '80x100', '65x30'], true)) {
+        return normalizeLabelSize($userSize);
+    }
+
+    $settings = getSystemSettings($pdo, $forceRefresh);
+    $savedDefault = strtolower(trim($settings['default_label_size'] ?? ''));
+    if (in_array($savedDefault, ['110x80', '80x110', '100x80', '80x100', '65x30'], true)) {
+        return normalizeLabelSize($savedDefault);
+    }
+
+    $w = (int)($settings['label_width_mm'] ?? 65);
+    $h = (int)($settings['label_height_mm'] ?? 30);
+
+    if (($w >= 80 && $h >= 75) || ($w === 110 && $h === 80) || ($w === 80 && $h === 110) || ($w === 100 && $h === 80) || ($w === 80 && $h === 100)) {
+        return '110x80';
+    }
+    return '65x30';
+}
+
+/**
+ * Lưu khổ tem in mặc định ('65x30' hoặc '110x80') vào session và CSDL
+ * Chuẩn tem lớn (80x100 / 100x80 / 110x80): Hướng ngang (LANDSCAPE)
+ * @param string $size
+ * @param PDO|null $pdo
+ * @return bool
+ */
+function saveDefaultLabelSize($size, PDO $pdo = null) {
+    if (session_status() === PHP_SESSION_NONE) {
+        @session_start();
+    }
+    $size = normalizeLabelSize($size);
+
+    if ($pdo === null) {
+        $pdo = getDbConnection();
+    }
+
+    $_SESSION['default_label_size'] = $size;
+    // Store Landscape dimensions (Width x Height in mm)
+    $w = ($size === '110x80') ? 100 : 65;
+    $h = ($size === '110x80') ? 80 : 30;
+
+    updateSystemSetting('label_width_mm', (string)$w, $pdo);
+    updateSystemSetting('label_height_mm', (string)$h, $pdo);
+    updateSystemSetting('default_label_size', $size, $pdo);
+
+    return true;
+}
+
+/**
+ * Kiểm tra tính hợp lệ của toàn bộ dữ liệu trước khi gửi lệnh in
+ * Bao gồm: Mã CTSX, Mã sản phẩm, QR Code, Số lượng tem, Máy in, Kích thước tem
+ * @param array $params
+ * @return array ['valid' => bool, 'message' => string, 'errors' => array]
+ */
+function validatePrintJobData(array $params) {
+    $orderCode   = trim((string)($params['order_code'] ?? ''));
+    $productCode = trim((string)($params['product_code'] ?? ''));
+    $printerName = trim((string)($params['printer_name'] ?? ''));
+    $rawSize     = strtolower(trim((string)($params['label_size'] ?? '')));
+    $labels      = is_array($params['labels'] ?? null) ? $params['labels'] : [];
+    $labelCount  = (int)($params['label_count'] ?? $params['box_count'] ?? count($labels));
+
+    if ($orderCode === '') {
+        $msg = 'Lỗi dữ liệu in: Thiếu Mã chỉ thị sản xuất (Mã CTSX)!';
+        return ['valid' => false, 'message' => $msg, 'errors' => [$msg]];
+    }
+    if ($productCode === '') {
+        $msg = 'Lỗi dữ liệu in: Thiếu Mã sản phẩm!';
+        return ['valid' => false, 'message' => $msg, 'errors' => [$msg]];
+    }
+    if ($labelCount <= 0 || empty($labels)) {
+        $msg = 'Lỗi dữ liệu in: Số lượng tem cần in không hợp lệ!';
+        return ['valid' => false, 'message' => $msg, 'errors' => [$msg]];
+    }
+    if ($printerName === '') {
+        $msg = 'Lỗi cấu hình in: Chưa chọn máy in tem!';
+        return ['valid' => false, 'message' => $msg, 'errors' => [$msg]];
+    }
+    if (!in_array($rawSize, ['65x30', '110x80', '80x110', '100x80', '80x100'], true)) {
+        $msg = 'Lỗi cấu hình in: Kích thước tem không hợp lệ (hỗ trợ 65x30 hoặc 80x100 / 100x80 / 110x80)!';
+        return ['valid' => false, 'message' => $msg, 'errors' => [$msg]];
+    }
+
+    foreach ($labels as $idx => $lbl) {
+        $qrContent = trim((string)($lbl['qr_content'] ?? ''));
+        $qrBase64  = trim((string)($lbl['qr_base64'] ?? ''));
+        $boxNo     = trim((string)($lbl['box_no'] ?? ''));
+        if ($qrContent === '' || $qrBase64 === '' || !str_starts_with($qrBase64, 'data:image/')) {
+            $msg = 'Lỗi dữ liệu in: Mã QR Code ở tem thứ ' . ($idx + 1) . ' không hợp lệ hoặc bị rỗng!';
+            return ['valid' => false, 'message' => $msg, 'errors' => [$msg]];
+        }
+        if ($boxNo === '') {
+            $msg = 'Lỗi dữ liệu in: Thiếu Mã thùng (Box No) ở tem thứ ' . ($idx + 1) . '!';
+            return ['valid' => false, 'message' => $msg, 'errors' => [$msg]];
+        }
+    }
+
+    return ['valid' => true, 'message' => 'Dữ liệu hợp lệ', 'errors' => []];
+}
+
+/**
+ * Tự động gửi lệnh in trực tiếp đến máy in Windows đã chọn thông qua Windows Print Spooler (.NET PrintDocument)
+ * Không mở hộp thoại Print thủ công, đảm bảo 1 tem = 1 trang, 10 tem = 10 trang, không phát sinh trang trắng.
+ * Hỗ trợ chuẩn tem 65x30mm (Landscape) và 80x100mm / 100x80mm / 110x80mm (Landscape).
+ *
+ * @param array $labels Danh sách dữ liệu tem
+ * @param string $printerName Tên máy in đích
+ * @param string $labelSize Kích thước tem ('65x30' hoặc '110x80' / '80x100' / '100x80')
+ * @return array ['success' => bool, 'message' => string, 'pages_printed' => int]
+ */
+function dispatchWindowsDirectPrint(array $labels, $printerName, $labelSize = '65x30') {
+    $printerName = trim((string)$printerName);
+    $labelSize   = normalizeLabelSize($labelSize);
+
+    // Auto-detect large label printer if printer name explicitly indicates 80x110 / 110x80 / 80x100 / 100x80
+    if (preg_match('/(80\s*x\s*110|110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/i', $printerName)) {
+        $labelSize = '110x80';
+    } elseif (preg_match('/65\s*x\s*30/i', $printerName)) {
+        $labelSize = '65x30';
+    }
+
+    // Ensure every label has a valid PNG Base64 QR code before sending to Windows Print Spooler
+    foreach ($labels as &$lbl) {
+        $b64 = trim((string)($lbl['qr_base64'] ?? ''));
+        $qrTxt = trim((string)($lbl['qr_content'] ?? ''));
+        if ($qrTxt !== '' && ($b64 === '' || !preg_match('/^data:image\/png;base64,/i', $b64))) {
+            $lbl['qr_base64'] = generateQrDataUri($qrTxt, 8, 1);
+        }
+    }
+    unset($lbl);
+
+    if (empty($labels) || $printerName === '') {
+        return [
+            'success'       => false,
+            'message'       => 'Thiếu dữ liệu tem hoặc chưa chọn máy in.',
+            'pages_printed' => 0
+        ];
+    }
+
+    if (stripos(PHP_OS_FAMILY, 'Windows') === false || !function_exists('shell_exec')) {
+        return [
+            'success'       => false,
+            'message'       => 'Môi trường máy chủ không hỗ trợ Windows Print Spooler trực tiếp.',
+            'pages_printed' => 0
+        ];
+    }
+
+    $tempDir = __DIR__ . '/../logs/spool';
+    if (!is_dir($tempDir)) {
+        @mkdir($tempDir, 0777, true);
+    }
+
+    $jobId    = uniqid('printjob_', true);
+    $jsonFile = $tempDir . '/' . $jobId . '.json';
+    $ps1File  = $tempDir . '/direct_print_worker.ps1';
+
+    $payload = [
+        'printer_name' => $printerName,
+        'label_size'   => $labelSize,
+        'pdf_fallback' => $tempDir . '/last_printed_labels.pdf',
+        'labels'       => array_values($labels)
+    ];
+
+    if (@file_put_contents($jsonFile, json_encode($payload, JSON_UNESCAPED_UNICODE)) === false) {
+        return [
+            'success'       => false,
+            'message'       => 'Không thể khởi tạo tệp dữ liệu lệnh in tạm thời.',
+            'pages_printed' => 0
+        ];
+    }
+
+    // Create or update the reusable PowerShell direct print worker script
+    $psScriptContent = <<<'POWERSHELL'
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$JobJsonPath
+)
+
+$ErrorActionPreference = "Stop"
+
+try {
+    if (-not (Test-Path -LiteralPath $JobJsonPath)) {
+        Write-Output '{"success":false,"message":"Job JSON file not found"}'
+        exit 1
+    }
+
+    $jsonRaw = [System.IO.File]::ReadAllText($JobJsonPath, [System.Text.Encoding]::UTF8)
+    $job = $jsonRaw | ConvertFrom-Json
+
+    $printerName = [string]$job.printer_name
+    $labelSize   = [string]$job.label_size
+    $labels      = @($job.labels)
+
+    if ($labels.Count -eq 0) {
+        Write-Output '{"success":false,"message":"No labels to print"}'
+        exit 1
+    }
+
+    Add-Type -AssemblyName System.Drawing
+
+    $doc = New-Object System.Drawing.Printing.PrintDocument
+    $doc.DocumentName = "MES_BoxLabels_" + $labelSize + "_" + $labels.Count + "p"
+    $doc.PrintController = New-Object System.Drawing.Printing.StandardPrintController
+    $doc.OriginAtMargins = $false
+
+    # Match printer name (exact or case-insensitive)
+    $doc.PrinterSettings.PrinterName = $printerName
+    if (-not $doc.PrinterSettings.IsValid) {
+        foreach ($installed in [System.Drawing.Printing.PrinterSettings]::InstalledPrinters) {
+            if ($installed.ToString().Trim().ToLower() -eq $printerName.Trim().ToLower()) {
+                $doc.PrinterSettings.PrinterName = $installed.ToString()
+                break
+            }
+        }
+    }
+
+    if (-not $doc.PrinterSettings.IsValid) {
+        $errMsg = "May in '" + $printerName + "' khong ton tai tren he thong Windows"
+        $outObj = @{ success = $false; message = $errMsg; pages_printed = 0 }
+        Write-Output ($outObj | ConvertTo-Json -Compress)
+        exit 1
+    }
+
+    # Handle virtual file printers (Microsoft Print to PDF / XPS) without blocking on Save As dialog
+    $pLower = $doc.PrinterSettings.PrinterName.ToLower()
+    if ($pLower -match "print to pdf" -or $pLower -match "xps document writer") {
+        $doc.PrinterSettings.PrintToFile = $true
+        $doc.PrinterSettings.PrintFileName = [string]$job.pdf_fallback
+    }
+
+    $ps = $doc.DefaultPageSettings
+    $ps.Margins = New-Object System.Drawing.Printing.Margins(0, 0, 0, 0)
+
+    # Configure PaperSize & Landscape orientation (Width > Height)
+    # Large label (80x100 / 100x80 / 110x80): ~394-433 x 300-315 hundredths of an inch (100-110mm wide x 76-80mm high)
+    # Small label (65x30): 256 x 118 hundredths of an inch (65mm wide x 30mm high)
+    $curW = $ps.PaperSize.Width
+    $curH = $ps.PaperSize.Height
+
+    if ($labelSize -eq "110x80") {
+        $isCalibratedLarge = (($curW -ge 370 -and $curW -le 450 -and $curH -ge 275 -and $curH -le 345) -or ($curH -ge 370 -and $curH -le 450 -and $curW -ge 275 -and $curW -le 345))
+        if (-not $isCalibratedLarge) {
+            $ps.PaperSize = New-Object System.Drawing.Printing.PaperSize("MES_Label_100x80_Landscape", 394, 315)
+        }
+    } else {
+        $isCalibratedSmall = (($curW -ge 230 -and $curW -le 280 -and $curH -ge 100 -and $curH -le 140) -or ($curH -ge 230 -and $curH -le 280 -and $curW -ge 100 -and $curW -le 140))
+        if (-not $isCalibratedSmall) {
+            $ps.PaperSize = New-Object System.Drawing.Printing.PaperSize("MES_Label_65x30_Landscape", 256, 118)
+        }
+    }
+
+    # Guarantee LANDSCAPE when PaperSize is defined with Width < Height (e.g. 80mm x 100mm)
+    if ($ps.PaperSize.Width -lt $ps.PaperSize.Height) {
+        $ps.Landscape = $true
+    } else {
+        $ps.Landscape = $false
+    }
+
+    $script:pageIndex = 0
+
+    $doc.add_PrintPage({
+        param($sender, $e)
+
+        $g = $e.Graphics
+        $g.PageUnit = [System.Drawing.GraphicsUnit]::Millimeter
+
+        $item = $labels[$script:pageIndex]
+
+        $targetW = if ($labelSize -eq "110x80") { 104.0 } else { 65.0 }
+        $targetH = if ($labelSize -eq "110x80") { 80.0 } else { 30.0 }
+
+        $clipW = [double]$g.VisibleClipBounds.Width
+        $clipH = [double]$g.VisibleClipBounds.Height
+
+        # Adapt to thermal printhead printable area (e.g., 103.97mm x 76.2mm on Zebra 4-inch roll) while capping at targetW x targetH on A4/uncalibrated drivers
+        $drawW = if ($clipW -gt 20.0 -and $clipW -lt $targetW) { $clipW } else { $targetW }
+        $drawH = if ($clipH -gt 15.0 -and $clipH -lt $targetH) { $clipH } else { $targetH }
+
+        # Render onto an offscreen 24-bpp RGB Bitmap at the printer's native DPI (e.g. 300 DPI).
+        # This prevents ZDesigner monochrome GDI drivers from corrupting scaled PNG bitmaps into solid black boxes.
+        $dpiX = if ($g.DpiX -gt 0) { [float]$g.DpiX } else { 300.0 }
+        $dpiY = if ($g.DpiY -gt 0) { [float]$g.DpiY } else { 300.0 }
+        $pxW  = [Math]::Max(120, [int][Math]::Round(($drawW / 25.4) * $dpiX))
+        $pxH  = [Math]::Max(60,  [int][Math]::Round(($drawH / 25.4) * $dpiY))
+
+        $canvas = New-Object System.Drawing.Bitmap($pxW, $pxH, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+        $canvas.SetResolution($dpiX, $dpiY)
+
+        $cg = [System.Drawing.Graphics]::FromImage($canvas)
+        $cg.Clear([System.Drawing.Color]::White)
+        $cg.PageUnit = [System.Drawing.GraphicsUnit]::Millimeter
+        $cg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $cg.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+        $cg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+        $cg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+
+        # Helper to auto-fit bold font within available width so text never clips or truncates with ellipsis
+        $fitFont = {
+            param([string]$txt, [float]$maxPt, [float]$minPt, [float]$maxW, [System.Drawing.FontStyle]$style = [System.Drawing.FontStyle]::Bold)
+            if ([string]::IsNullOrEmpty($txt)) {
+                return New-Object System.Drawing.Font("Arial", $maxPt, $style)
+            }
+            $safeMaxW = [Math]::Max(10.0, ($maxW - 1.2))
+            $pt = $maxPt
+            while ($pt -gt $minPt) {
+                $fTest = New-Object System.Drawing.Font("Arial", $pt, $style)
+                $sz = $cg.MeasureString($txt, $fTest)
+                if ($sz.Width -le $safeMaxW) {
+                    return $fTest
+                }
+                $fTest.Dispose()
+                $pt = [float]($pt - 0.5)
+            }
+            return New-Object System.Drawing.Font("Arial", $minPt, $style)
+        }
+
+        # Decode Base64 QR Image (keep MemoryStream alive until after DrawImage completes)
+        $qrImg = $null
+        $ms = $null
+        $b64 = [string]$item.qr_base64
+        if ($b64 -match "^data:image\/[a-zA-Z0-9\+\-\.]+;base64,(.+)$") {
+            $bytes = [System.Convert]::FromBase64String($Matches[1])
+            $ms = New-Object System.IO.MemoryStream(,$bytes)
+            $qrImg = [System.Drawing.Image]::FromStream($ms)
+        }
+
+        $line1 = [string]$item.material_name
+        $weightVal = [string]$item.weight
+        $line2 = if ([string]::IsNullOrWhiteSpace($weightVal)) { "$($item.qty) pcs" } else { "$($item.qty) pcs | $weightVal Kg" }
+        $line3 = "||"
+        $suppVal = [string]$item.supplier
+        $line4 = if ([string]::IsNullOrWhiteSpace($suppVal)) { "$($item.lot_no)" } else { "$($item.lot_no) | $suppVal" }
+        $line5 = [string]$item.box_no
+
+        $sf = New-Object System.Drawing.StringFormat
+        $sf.FormatFlags = [System.Drawing.StringFormatFlags]::NoWrap
+        $sf.Trimming = [System.Drawing.StringTrimming]::None
+        $sf.Alignment = [System.Drawing.StringAlignment]::Near
+        $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
+
+        if ($labelSize -eq "110x80") {
+            # =========================================================
+            # LAYOUT TEM LON 80 x 100 / 100 x 80 / 110 x 80 MM (LANDSCAPE)
+            # Full-area utilization: Maximized 58mm QR Code & Full-Width Bold Typography
+            # =========================================================
+            $padX = 1.8
+            $padY = 2.0
+            $qrSize = [Math]::Min(58.0, ($drawH - ($padY * 2.0)))
+            $qrX = $padX
+            $qrY = ($drawH - $qrSize) / 2.0
+
+            if ($qrImg -ne $null) {
+                $cg.DrawImage($qrImg, [System.Drawing.RectangleF]::new([float]$qrX, [float]$qrY, [float]$qrSize, [float]$qrSize))
+                $qrImg.Dispose()
+            }
+            if ($ms -ne $null) {
+                $ms.Dispose()
+            }
+
+            $gapX = 2.0
+            $textX = $qrX + $qrSize + $gapX
+            $textW = [Math]::Max(32.0, ($drawW - $textX - $padX))
+
+            $usableH = $drawH - ($padY * 2.0)
+            $rowH = $usableH / 5.0
+
+            $f1 = & $fitFont $line1 18.0 8.5 $textW ([System.Drawing.FontStyle]::Bold)
+            $f2 = & $fitFont $line2 16.0 9.0 $textW ([System.Drawing.FontStyle]::Bold)
+            $f3 = New-Object System.Drawing.Font("Arial", 15.0, [System.Drawing.FontStyle]::Bold)
+            $f4 = & $fitFont $line4 14.5 8.5 $textW ([System.Drawing.FontStyle]::Bold)
+            $f5 = & $fitFont $line5 18.0 9.5 $textW ([System.Drawing.FontStyle]::Bold)
+
+            $cg.DrawString($line1, $f1, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($padY + ($rowH * 0.0)), [float]$textW, [float]$rowH), $sf)
+            $cg.DrawString($line2, $f2, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($padY + ($rowH * 1.0)), [float]$textW, [float]$rowH), $sf)
+            $cg.DrawString($line3, $f3, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($padY + ($rowH * 2.0)), [float]$textW, [float]$rowH), $sf)
+
+            # Allow 2-line wrap on Line 4 (Lot | Supplier) if long so full supplier info is visible
+            $sfWrap = New-Object System.Drawing.StringFormat
+            $sfWrap.Trimming = [System.Drawing.StringTrimming]::EllipsisCharacter
+            $sfWrap.Alignment = [System.Drawing.StringAlignment]::Near
+            $sfWrap.LineAlignment = [System.Drawing.StringAlignment]::Center
+            $cg.DrawString($line4, $f4, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($padY + ($rowH * 3.0)), [float]$textW, [float]$rowH), $sfWrap)
+            $sfWrap.Dispose()
+
+            $lineY = [float]($padY + ($rowH * 4.0))
+            $penDiv = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 0.75)
+            $cg.DrawLine($penDiv, [float]$textX, $lineY, [float]($textX + $textW - 0.8), $lineY)
+            $penDiv.Dispose()
+
+            $cg.DrawString($line5, $f5, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($lineY + 0.8), [float]$textW, [float]($rowH - 0.8)), $sf)
+
+            $f1.Dispose(); $f2.Dispose(); $f3.Dispose(); $f4.Dispose(); $f5.Dispose()
+        } else {
+            # =========================================================
+            # LAYOUT TEM 65 x 30 MM (LANDSCAPE: RONG 65MM x CAO 30MM)
+            # =========================================================
+            $padX = 1.5
+            $padY = 1.2
+            $qrSize = [Math]::Min(25.5, ($drawH - ($padY * 2.0)))
+            $qrX = $padX
+            $qrY = ($drawH - $qrSize) / 2.0
+
+            if ($qrImg -ne $null) {
+                $cg.DrawImage($qrImg, [System.Drawing.RectangleF]::new([float]$qrX, [float]$qrY, [float]$qrSize, [float]$qrSize))
+                $qrImg.Dispose()
+            }
+            if ($ms -ne $null) {
+                $ms.Dispose()
+            }
+
+            $gapX = 1.6
+            $textX = $qrX + $qrSize + $gapX
+            $textW = [Math]::Max(20.0, ($drawW - $textX - $padX))
+
+            $usableH = $drawH - ($padY * 2.0)
+            $rowH = $usableH / 5.0
+
+            $f1 = & $fitFont $line1 9.0 6.5 $textW ([System.Drawing.FontStyle]::Bold)
+            $f2 = & $fitFont $line2 8.0 6.0 $textW ([System.Drawing.FontStyle]::Bold)
+            $f3 = New-Object System.Drawing.Font("Arial", 7.2, [System.Drawing.FontStyle]::Bold)
+            $f4 = & $fitFont $line4 7.2 5.5 $textW ([System.Drawing.FontStyle]::Bold)
+            $f5 = & $fitFont $line5 9.0 6.5 $textW ([System.Drawing.FontStyle]::Bold)
+
+            $cg.DrawString($line1, $f1, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($padY + ($rowH * 0.0)), [float]$textW, [float]$rowH), $sf)
+            $cg.DrawString($line2, $f2, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($padY + ($rowH * 1.0)), [float]$textW, [float]$rowH), $sf)
+            $cg.DrawString($line3, $f3, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($padY + ($rowH * 2.0)), [float]$textW, [float]$rowH), $sf)
+            $cg.DrawString($line4, $f4, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($padY + ($rowH * 3.0)), [float]$textW, [float]$rowH), $sf)
+
+            $lineY = [float]($padY + ($rowH * 4.0))
+            $penDiv = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 0.4)
+            $cg.DrawLine($penDiv, [float]$textX, $lineY, [float]($textX + $textW - 0.5), $lineY)
+            $penDiv.Dispose()
+
+            $cg.DrawString($line5, $f5, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new([float]$textX, [float]($lineY + 0.4), [float]$textW, [float]($rowH - 0.4)), $sf)
+
+            $f1.Dispose(); $f2.Dispose(); $f3.Dispose(); $f4.Dispose(); $f5.Dispose()
+        }
+
+        $sf.Dispose()
+        $cg.Dispose()
+
+        # Blit the 300-DPI rendered bitmap 1:1 in Pixel units onto the printer Graphics surface
+        $g.PageUnit = [System.Drawing.GraphicsUnit]::Pixel
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+        $g.DrawImage($canvas, 0, 0, $pxW, $pxH)
+        $canvas.Dispose()
+
+        # Strict pagination: 1 label = 1 page, N labels = N pages, never any blank page
+        $script:pageIndex++
+        if ($script:pageIndex -lt $labels.Count) {
+            $e.HasMorePages = $true
+        } else {
+            $e.HasMorePages = $false
+        }
+    })
+
+    $doc.Print()
+    $doc.Dispose()
+
+    $res = @{
+        success       = $true
+        message       = "Da gui lenh in truc tiep (" + $labels.Count + " tem, kho " + $labelSize + " Landscape) den may in: " + $printerName
+        pages_printed = $labels.Count
+    }
+    Write-Output ($res | ConvertTo-Json -Compress)
+    exit 0
+} catch {
+    $errRes = @{
+        success       = $false
+        message       = "Loi Windows Print Spooler: " + $_.Exception.Message
+        pages_printed = 0
+    }
+    Write-Output ($errRes | ConvertTo-Json -Compress)
+    exit 1
+}
+POWERSHELL;
+
+    @file_put_contents($ps1File, $psScriptContent);
+
+    $escapedPs1  = escapeshellarg($ps1File);
+    $escapedJson = escapeshellarg($jsonFile);
+    $cmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {$escapedPs1} -JobJsonPath {$escapedJson} 2>&1";
+    $rawOut = @shell_exec($cmd);
+    @unlink($jsonFile);
+
+    if (!empty($rawOut)) {
+        // Find JSON line in output
+        $lines = preg_split('/\r\n|\r|\n/', trim($rawOut));
+        for ($i = count($lines) - 1; $i >= 0; $i--) {
+            $line = trim($lines[$i]);
+            if (str_starts_with($line, '{') && str_ends_with($line, '}')) {
+                $decoded = json_decode($line, true);
+                if (is_array($decoded) && isset($decoded['success'])) {
+                    return [
+                        'success'       => (bool)$decoded['success'],
+                        'message'       => (string)($decoded['message'] ?? ''),
+                        'pages_printed' => (int)($decoded['pages_printed'] ?? 0)
+                    ];
+                }
+            }
+        }
+    }
+
+    return [
+        'success'       => false,
+        'message'       => 'Không nhận được phản hồi từ trình điều khiển máy in: ' . trim((string)$rawOut),
+        'pages_printed' => 0
+    ];
+}
