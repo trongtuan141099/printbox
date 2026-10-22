@@ -588,61 +588,48 @@ async function discoverEntryClientPrinters() {
         });
     };
 
-    // Probe Zebra Browser Print & Client Local Print Service on Client PC
-    const isLocalWorkstation = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname || '');
+    // Probe Zebra Browser Print & Windows Spooler on system
     const isHttps = (window.location.protocol === 'https:');
     const zebraUrl = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
 
-    // Only query loopback web server if client is running directly on localhost
-    const localUrls = [zebraUrl];
-    if (isLocalWorkstation) {
-        const basePath = (window.location.pathname || '/printbox/print_entry.php').replace(/print_entry\.php.*$/, 'orders.php');
-        localUrls.push('http://127.0.0.1' + basePath + '?action=client_local_printers');
-    }
-
-    for (const url of localUrls) {
-        try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 600);
-            const res = await fetch(url, { method: 'GET', mode: 'cors', signal: ctrl.signal });
-            clearTimeout(timer);
-            if (!res.ok) continue;
+    // 1. Probe Zebra Browser Print if active on client
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 600);
+        const res = await fetch(zebraUrl, { method: 'GET', mode: 'cors', signal: ctrl.signal });
+        clearTimeout(timer);
+        if (res.ok) {
             const data = await res.json();
             if (data && Array.isArray(data.printer)) {
                 addList(data.printer.map(p => ({ name: p.name, default: false, source: 'zebra_browser_print', device: p })));
-            } else if (data && Array.isArray(data.printers)) {
+            }
+        }
+    } catch (e) {}
+
+    // 2. Always fetch Windows Spooler printers (Local, Network, Shared) via server
+    try {
+        const fd = new FormData();
+        fd.append('action', 'refresh_printers');
+        const res = await fetch('orders.php', { method: 'POST', body: fd });
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.success && Array.isArray(data.printers)) {
                 addList(data.printers.map(p => ({
                     name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
                     default: Boolean(typeof p === 'object' && p !== null && p.default),
-                    source: 'client_local_service'
+                    is_thermal: Boolean(typeof p === 'object' && p !== null && p.is_thermal),
+                    is_network: Boolean(typeof p === 'object' && p !== null && p.is_network),
+                    port: (typeof p === 'object' && p !== null) ? (p.port || '') : '',
+                    source: (typeof p === 'object' && p !== null && p.source) ? p.source : 'windows_spooler'
                 })));
             }
-        } catch (e) {
-            // Suppress connection refused exceptions
         }
-    }
-    if (merged.size === 0) {
-        try {
-            const fd = new FormData();
-            fd.append('action', 'refresh_printers');
-            const res = await fetch('orders.php', { method: 'POST', body: fd });
-            if (res.ok) {
-                const data = await res.json();
-                if (data && data.success && Array.isArray(data.printers)) {
-                    addList(data.printers.map(p => ({
-                        name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
-                        default: Boolean(typeof p === 'object' && p !== null && p.default),
-                        source: 'client_host_cim'
-                    })));
-                }
-            }
-        } catch (e) {}
-    }
+    } catch (e) {}
 
     return Array.from(merged.values());
 }
 
-async function refreshEntryClientPrinters(showFeedback = false) {
+async function refreshEntryClientPrinters(showFeedback = false, retryCount = 0) {
     if (showFeedback) {
         setEntryPrinterMsg('⏳ Đang quét các máy in trên máy tính hiện tại...', '#2563eb');
     }

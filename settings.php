@@ -431,7 +431,7 @@ function onSettingsPrinterFormSubmit() {
     return true;
 }
 
-async function refreshSettingsClientPrinters(showFeedback = false) {
+async function refreshSettingsClientPrinters(showFeedback = false, retryCount = 0) {
     if (showFeedback) {
         setSettingsPrinterMsg('⏳ Đang quét các máy in trên máy tính hiện tại...', '#2563eb');
     }
@@ -447,55 +447,47 @@ async function refreshSettingsClientPrinters(showFeedback = false) {
         });
     };
 
-    const isLocalWorkstation = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname || '');
     const isHttps = (window.location.protocol === 'https:');
     const zebraUrl = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
 
-    // Only query loopback web server if client is running directly on localhost
-    const localUrls = [zebraUrl];
-    if (isLocalWorkstation) {
-        const basePath = (window.location.pathname || '/printbox/settings.php').replace(/settings\.php.*$/, 'orders.php');
-        localUrls.push('http://127.0.0.1' + basePath + '?action=client_local_printers');
-    }
-
-    for (const url of localUrls) {
-        try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 600);
-            const res = await fetch(url, { method: 'GET', mode: 'cors', signal: ctrl.signal });
-            clearTimeout(timer);
-            if (!res.ok) continue;
+    // 1. Probe Zebra if running on client
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 600);
+        const res = await fetch(zebraUrl, { method: 'GET', mode: 'cors', signal: ctrl.signal });
+        clearTimeout(timer);
+        if (res.ok) {
             const data = await res.json();
             if (data && Array.isArray(data.printer)) {
                 addList(data.printer.map(p => ({ name: p.name, default: false })));
-            } else if (data && Array.isArray(data.printers)) {
+            }
+        }
+    } catch (e) {}
+
+    // 2. Always fetch Windows Spooler printers from system
+    try {
+        const fd = new FormData();
+        fd.append('action', 'refresh_printers');
+        const res = await fetch('orders.php', { method: 'POST', body: fd });
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.success && Array.isArray(data.printers)) {
                 addList(data.printers.map(p => ({
                     name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
-                    default: Boolean(typeof p === 'object' && p !== null && p.default)
+                    default: Boolean(typeof p === 'object' && p !== null && p.default),
+                    is_thermal: Boolean(typeof p === 'object' && p !== null && p.is_thermal),
+                    is_network: Boolean(typeof p === 'object' && p !== null && p.is_network),
+                    port: (typeof p === 'object' && p !== null) ? (p.port || '') : ''
                 })));
             }
-        } catch (e) {
-            // Suppress connection refused exceptions
         }
-    }
-    if (merged.size === 0) {
-        try {
-            const fd = new FormData();
-            fd.append('action', 'refresh_printers');
-            const res = await fetch('orders.php', { method: 'POST', body: fd });
-            if (res.ok) {
-                const data = await res.json();
-                if (data && data.success && Array.isArray(data.printers)) {
-                    addList(data.printers.map(p => ({
-                        name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
-                        default: Boolean(typeof p === 'object' && p !== null && p.default)
-                    })));
-                }
-            }
-        } catch (e) {}
-    }
+    } catch (e) {}
 
-    const discovered = Array.from(merged.values());
+    let discovered = Array.from(merged.values());
+    if (discovered.length === 0 && retryCount < 2) {
+        await new Promise(r => setTimeout(r, 400));
+        return refreshSettingsClientPrinters(showFeedback, retryCount + 1);
+    }
     const saved = getSettingsSavedDefaultPrinter();
     const sel = document.getElementById('settings_default_printer');
     if (!sel) return;

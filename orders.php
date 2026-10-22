@@ -2300,15 +2300,10 @@ async function probeWebUsbPrintersClient() {
     return [];
 }
 
-// 5. Discover all available printers strictly on the Client PC
+// 5. Discover all available printers (Local USB, Network LAN, Shared, Zebra Browser Print, QZ Tray)
 async function discoverClientPrinters(forceRefresh = false) {
-    // Circuit breaker / cache check: If already probed and service is unavailable, do not probe loopback repeatedly
-    if (!forceRefresh && isLocalPrintServiceProbed && !isLocalPrintServiceAvailable) {
-        return clientPrintersRegistry.filter(p => p.name !== 'Browser Print');
-    }
-
     const mergedMap = new Map();
-    const addPrinters = (list) => {
+    const addPrinters = (list, srcLabel) => {
         if (!Array.isArray(list)) return;
         list.forEach(item => {
             if (!item || !item.name) return;
@@ -2317,28 +2312,29 @@ async function discoverClientPrinters(forceRefresh = false) {
             const key = name.toLowerCase();
             if (!mergedMap.has(key)) {
                 mergedMap.set(key, item);
-            } else if (item.default) {
-                mergedMap.get(key).default = true;
+            } else {
+                const existing = mergedMap.get(key);
+                if (item.default) existing.default = true;
+                if (item.is_thermal) existing.is_thermal = true;
+                if (item.is_network) existing.is_network = true;
             }
         });
     };
 
-    try {
-        const [zebraList, localSvcList, qzList, usbList] = await Promise.all([
-            probeZebraBrowserPrintClient(),
-            probeClientLocalPrintService(),
-            probeQzTrayClient(),
-            probeWebUsbPrintersClient()
-        ]);
+    // Run parallel discovery: Local agents (Zebra/QZ/USB) + Windows Spooler from server
+    let zebraList = [];
+    let qzList = [];
+    let usbList = [];
+    let serverList = [];
 
-        addPrinters(zebraList);
-        addPrinters(localSvcList);
-        addPrinters(qzList);
-        addPrinters(usbList);
-    } catch (e) {}
+    const probeLocalTasks = [
+        probeZebraBrowserPrintClient().then(res => { zebraList = res; addPrinters(res, 'zebra'); }).catch(() => {}),
+        probeQzTrayClient().then(res => { qzList = res; addPrinters(res, 'qz'); }).catch(() => {}),
+        probeWebUsbPrintersClient().then(res => { usbList = res; addPrinters(res, 'usb'); }).catch(() => {})
+    ];
 
-    // If loopback probes found none, check via server session / remote client query (orders.php)
-    if (mergedMap.size === 0) {
+    // Always fetch Windows Spooler printers (Local, Network, Shared) via server API
+    const fetchServerTask = (async () => {
         try {
             const fd = new FormData();
             fd.append('action', 'refresh_printers');
@@ -2346,18 +2342,36 @@ async function discoverClientPrinters(forceRefresh = false) {
             if (res.ok) {
                 const data = await res.json();
                 if (data && data.success && Array.isArray(data.printers)) {
+                    serverList = data.printers;
                     if (data.default_printer && !serverUserDefaultPrinter) {
                         serverUserDefaultPrinter = data.default_printer;
                     }
                     addPrinters(data.printers.map(p => ({
                         name: (typeof p === 'object' && p !== null) ? String(p.name || '').trim() : String(p || '').trim(),
                         default: Boolean(typeof p === 'object' && p !== null && p.default),
-                        source: 'client_host_cim'
-                    })));
+                        port: (typeof p === 'object' && p !== null) ? (p.port || '') : '',
+                        driver: (typeof p === 'object' && p !== null) ? (p.driver || '') : '',
+                        is_thermal: Boolean(typeof p === 'object' && p !== null && p.is_thermal),
+                        is_network: Boolean(typeof p === 'object' && p !== null && p.is_network),
+                        is_shared: Boolean(typeof p === 'object' && p !== null && p.is_shared),
+                        source: (typeof p === 'object' && p !== null && p.source) ? p.source : 'windows_spooler'
+                    })), 'windows_spooler');
                 }
             }
-        } catch (e) {}
-    }
+        } catch (e) {
+            console.warn('[PRINTER_DISCOVERY] Không thể truy vấn Windows Spooler API:', e);
+        }
+    })();
+
+    await Promise.allSettled([...probeLocalTasks, fetchServerTask]);
+
+    console.groupCollapsed('[PRINTER_DISCOVERY] Kết quả quét máy in hệ thống');
+    console.log(' - Zebra Browser Print:', zebraList.length);
+    console.log(' - QZ Tray:', qzList.length);
+    console.log(' - WebUSB Devices:', usbList.length);
+    console.log(' - Windows Spooler (Local USB / Network / Shared):', serverList.length);
+    console.log(' => Tổng số máy in hợp lệ nhận diện:', mergedMap.size);
+    console.groupEnd();
 
     isLocalPrintServiceProbed = true;
     isLocalPrintServiceAvailable = (mergedMap.size > 0);
@@ -2365,16 +2379,25 @@ async function discoverClientPrinters(forceRefresh = false) {
     return Array.from(mergedMap.values());
 }
 
-async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh = false) {
+async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh = false, retryAttempt = 0) {
     if (isProbingPrinters) return;
     isProbingPrinters = true;
 
     try {
         if (showUserFeedback) {
-            setPrinterStatusMessage('⏳ Đang quét các máy in kết nối trên máy tính hiện tại...', 'info');
+            setPrinterStatusMessage('⏳ Đang quét toàn bộ máy in Windows trên hệ thống...', 'info');
         }
 
         const discovered = await discoverClientPrinters(forceRefresh);
+
+        // Retry mechanism: If 0 printers found on first try, retry up to 2 times with a slight delay before showing warning
+        if (discovered.length === 0 && retryAttempt < 2) {
+            isProbingPrinters = false;
+            console.warn(`[PRINTER_DISCOVERY] Lần quét #${retryAttempt + 1} chưa tìm thấy máy in, đang tự động quét lại lần #${retryAttempt + 2}...`);
+            await new Promise(r => setTimeout(r, 400));
+            return refreshConnectedPrinters(showUserFeedback, true, retryAttempt + 1);
+        }
+
         const printerNames = discovered.map(p => p.name);
         const savedPrinter = getSavedUserDefaultPrinter();
 
@@ -2391,22 +2414,27 @@ async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh =
                     selectedPrinter = '';
                     savedPrinterMissing = true;
                 }
-            } else {
-                const osDef = discovered.find(p => p.default) || discovered[0];
-                if (osDef) {
-                    selectedPrinter = osDef.name;
+            }
+            if (!selectedPrinter) {
+                // Auto-pick default printer: OS Default -> System Default -> First Available
+                const defP = discovered.find(p => p.default) ||
+                             (serverUserDefaultPrinter ? discovered.find(p => p.name.toLowerCase() === serverUserDefaultPrinter.toLowerCase()) : null) ||
+                             discovered[0];
+                if (defP) {
+                    selectedPrinter = defP.name;
                     onDefaultPrinterChange(selectedPrinter, false);
                 }
             }
         } else {
-            // FALLBACK TỰ ĐỘNG SANG "IN QUA TRÌNH DUYỆT" KHI KHÔNG CÓ DỊCH VỤ IN CỤC BỘ
+            // Only fallback to Browser Print after exhausting all discovery sources and retries
             clientPrintersRegistry = [{ name: 'Browser Print', default: true, source: 'browser_print' }];
             selectedPrinter = 'Browser Print';
+            console.warn('[PRINTER_DISCOVERY] Đã thử quét lại nhưng không tìm thấy máy in nào trong hệ thống Windows hoặc dịch vụ in cục bộ.');
         }
 
         const isFallback = (discovered.length === 0);
 
-        // Hiển thị hoặc ẩn panel thông báo thân thiện
+        // Show/hide friendly setup notice ONLY when truly no printers were detected
         const offPanel = document.getElementById('offcanvas_no_service_panel');
         if (offPanel) offPanel.style.display = isFallback ? 'block' : 'none';
         const modalPanel = document.getElementById('modal_no_service_panel');
@@ -2430,7 +2458,7 @@ async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh =
                     promptOpt.value = '';
                     promptOpt.textContent = savedPrinterMissing
                         ? `-- Máy in "${savedPrinter}" không còn kết nối, vui lòng chọn lại --`
-                        : '-- Chọn máy in trên máy tính hiện tại --';
+                        : '-- Chọn máy in tem sử dụng --';
                     promptOpt.selected = true;
                     sel.appendChild(promptOpt);
                 }
@@ -2438,17 +2466,23 @@ async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh =
                 discovered.forEach(pObj => {
                     const opt = document.createElement('option');
                     opt.value = pObj.name;
-                    opt.textContent = '🖨️ ' + pObj.name + (pObj.default ? ' (Mặc định máy trạm)' : '');
+                    let badge = '';
+                    if (pObj.is_thermal) badge = ' [Máy in tem]';
+                    if (pObj.is_network) badge = ` [Mạng LAN${pObj.port ? ': ' + pObj.port : ''}]`;
+                    if (pObj.is_shared)  badge = ' [Shared]';
+                    if (pObj.default)    badge += ' (Mặc định)';
+
+                    opt.textContent = '🖨️ ' + pObj.name + badge;
                     if (selectedPrinter && pObj.name === selectedPrinter) {
                         opt.selected = true;
                     }
                     sel.appendChild(opt);
                 });
 
-                // Tùy chọn In Qua Trình Duyệt luôn có sẵn
+                // Always append Browser Print manual option at the end
                 const browserOpt = document.createElement('option');
                 browserOpt.value = 'Browser Print';
-                browserOpt.textContent = '🌐 In Qua Trình Duyệt (Thủ công)';
+                browserOpt.textContent = '🌐 In Qua Trình Duyệt (Hộp thoại Print thủ công)';
                 if (selectedPrinter === 'Browser Print') browserOpt.selected = true;
                 sel.appendChild(browserOpt);
             }
@@ -2456,7 +2490,7 @@ async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh =
 
         syncPrinterSelectUI(selectedPrinter);
 
-        // Auto-sync label size if the active client printer specifies a label size
+        // Auto-sync label size if the active printer name explicitly specifies size
         if (selectedPrinter && selectedPrinter !== 'Browser Print') {
             const matchedSize = detectLabelSizeFromPrinterName(selectedPrinter);
             if (matchedSize && matchedSize !== activeLabelSize) {
@@ -2465,12 +2499,11 @@ async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh =
         }
 
         if (isFallback) {
-            // Không hiển thị lỗi đỏ kỹ thuật; thông báo thân thiện đã được hiển thị trên panel
             setPrinterStatusMessage('', 'info');
         } else if (savedPrinterMissing) {
             setPrinterStatusMessage(`⚠️ Máy in mặc định đã lưu ("${savedPrinter}") không còn tồn tại trên máy tính hiện tại. Vui lòng chọn lại máy in!`, 'warning');
         } else if (showUserFeedback) {
-            setPrinterStatusMessage(`✓ Đã tìm thấy ${discovered.length} máy in trên máy tính hiện tại!`, 'success');
+            setPrinterStatusMessage(`✓ Đã phát hiện ${discovered.length} máy in sẵn sàng trên hệ thống!`, 'success');
         } else {
             setPrinterStatusMessage('', 'info');
         }
@@ -2478,6 +2511,7 @@ async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh =
         isProbingPrinters = false;
     }
 }
+
 
 // Kích hoạt thủ công chế độ In Qua Trình Duyệt
 function activateBrowserPrintFallback(showToast = false) {
