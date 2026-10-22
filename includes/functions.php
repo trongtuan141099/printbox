@@ -1159,16 +1159,7 @@ function dispatchWindowsDirectPrint(array $labels, $printerName, $labelSize = '6
         ];
     }
 
-    // Never print on the Server's local printer when the request comes from a remote Client PC
-    if (!isClientLocalMachine() && !str_starts_with($printerName, '\\\\')) {
-        return [
-            'success'         => false,
-            'client_dispatch' => true,
-            'message'         => 'Chuyển lệnh in trực tiếp về máy tính người dùng hiện tại (Client PC).',
-            'pages_printed'   => 0
-        ];
-    }
-
+    // Prioritize direct printing via Windows Spooler if printer is available in system spooler.
     if (stripos(PHP_OS_FAMILY, 'Windows') === false || !function_exists('shell_exec')) {
         return [
             'success'       => false,

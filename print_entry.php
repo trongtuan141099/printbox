@@ -131,12 +131,21 @@ $prefillSlip = trim($_GET['slip'] ?? '');
                 <div class="form-group">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                         <label class="form-label fw-bold" style="margin-bottom:0;">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
-                        <div class="d-flex gap-2">
+                        <div class="d-flex flex-wrap gap-1 align-items-center">
                             <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="promptAddEntryCustomPrinter()" title="Khai báo thêm máy in đã cài đặt trên máy tính này">
-                                ➕ Thêm máy in
+                                ➕ Thêm
                             </button>
+                            <span class="text-muted" style="font-size:11px;">|</span>
+                            <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none text-danger" onclick="removeEntrySavedPrinter()" title="Xóa máy in đang chọn khỏi cấu hình">
+                                🗑️ Xóa
+                            </button>
+                            <span class="text-muted" style="font-size:11px;">|</span>
+                            <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none text-warning-emphasis" onclick="resetEntryPrinterConfig()" title="Đặt lại toàn bộ cấu hình máy in trên máy tính này">
+                                ⚙️ Đặt lại
+                            </button>
+                            <span class="text-muted" style="font-size:11px;">|</span>
                             <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="refreshEntryClientPrinters(true, true)" title="Quét lại máy in thực tế từ máy tính hiện tại">
-                                🔄 Làm mới
+                                🔄 Quét lại
                             </button>
                         </div>
                     </div>
@@ -580,6 +589,165 @@ function saveEntryCustomPrinters(list) {
     try {
         localStorage.setItem('printbox_client_custom_printers', JSON.stringify(list));
     } catch (e) {}
+}
+
+function removeEntrySavedPrinter() {
+    const sel = document.getElementById('input_printer_select');
+    const current = (sel ? sel.value : '') || getEntrySavedDefaultPrinter();
+    if (!current || current === 'Browser Print') {
+        alert('Vui lòng chọn máy in bạn muốn xóa khỏi danh sách cấu hình!');
+        return;
+    }
+    if (!confirm(`Bạn có chắc chắn muốn xóa cấu hình máy in "${current}" khỏi máy tính này không?`)) {
+        return;
+    }
+    const customList = getEntryCustomPrinters().filter(p => p.name.toLowerCase() !== current.toLowerCase());
+    saveEntryCustomPrinters(customList);
+
+    try {
+        localStorage.removeItem('printbox_default_printer_u_' + currentEntryUserId);
+        localStorage.removeItem('printbox_client_default_printer');
+        localStorage.removeItem('printbox_default_printer');
+        localStorage.removeItem('mes_default_printer');
+    } catch(e) {}
+
+    onEntryPrinterChange('Browser Print');
+    refreshEntryClientPrinters(true, true);
+    setEntryPrinterMsg(`✓ Đã xóa cấu hình máy in "${current}" khỏi máy tính này!`, '#15803d');
+}
+
+function resetEntryPrinterConfig() {
+    if (!confirm("Bạn có chắc chắn muốn ĐẶT LẠI TOÀN BỘ cấu hình máy in trên máy tính này không?\n\n- Toàn bộ máy in tùy chỉnh đã thêm sẽ được xóa.\n- Cấu hình máy in mặc định sẽ được đặt lại.\n- Hệ thống sẽ quét lại từ đầu.")) {
+        return;
+    }
+    try {
+        localStorage.removeItem('printbox_default_printer_u_' + currentEntryUserId);
+        localStorage.removeItem('printbox_client_default_printer');
+        localStorage.removeItem('printbox_default_printer');
+        localStorage.removeItem('printbox_client_custom_printers');
+        localStorage.removeItem('mes_default_printer');
+    } catch(e) {}
+
+    onEntryPrinterChange('Browser Print');
+    refreshEntryClientPrinters(true, true);
+    setEntryPrinterMsg('✓ Đã đặt lại toàn bộ cấu hình máy in trên máy tính này!', '#15803d');
+}
+
+function logEntryPrintOperation({
+    user = 'User #' + currentEntryUserId,
+    printer = '',
+    labelSize = '',
+    printMode = '',
+    resultStatus = '',
+    details = '',
+    labelCount = 0
+}) {
+    const timeStr = new Date().toLocaleString('vi-VN');
+    const badgeColor = resultStatus === 'DIRECT_SUCCESS' ? '#16a34a' :
+                       resultStatus === 'BROWSER_DIALOG_FALLBACK' ? '#d97706' : '#dc2626';
+    const statusText = resultStatus === 'DIRECT_SUCCESS' ? '✅ In trực tiếp thành công' :
+                       resultStatus === 'BROWSER_DIALOG_FALLBACK' ? '⚠️ Chuyển sang Print Dialog của trình duyệt' :
+                       resultStatus === 'PRINTER_NOT_FOUND' ? '❌ Không tìm thấy máy in' : '❌ Lỗi gửi lệnh in';
+
+    console.group(`%c[NHẬT KÝ IN TEM / PRINT LOG (ENTRY)] - ${statusText} - ${timeStr}`, `color:${badgeColor};font-weight:bold;`);
+    console.log('👤 Người dùng:', user);
+    console.log('🖨️ Máy in được chọn:', printer || '(Chưa chọn máy in)');
+    console.log('📐 Khổ tem:', labelSize || 'Mặc định');
+    console.log('⚙️ Chế độ in:', printMode || 'direct');
+    console.log('⏰ Thời gian in:', timeStr);
+    console.log('📦 Số lượng tem:', labelCount);
+    console.log('📊 Kết quả gửi lệnh in:', statusText);
+    if (details) console.log('📝 Chi tiết / Lý do:', details);
+    console.groupEnd();
+}
+
+function buildZplForEntryZebra(labels, labelSize) {
+    const isLarge = (labelSize === '110x80');
+    const pw = isLarge ? 832 : 520;
+    const ll = isLarge ? 640 : 240;
+    let zpl = '';
+    labels.forEach(lb => {
+        const qrText = String(lb.qr_content || '').replace(/\^/g, ' ');
+        const mat = String(lb.material_name || '').replace(/\^/g, ' ');
+        const qty = String(lb.qty || '') + ' pcs' + (lb.weight ? ' | ' + lb.weight + ' Kg' : '');
+        const lot = String(lb.lot_no || '') + (lb.supplier ? ' | ' + lb.supplier : '');
+        const box = String(lb.box_no || '').replace(/\^/g, ' ');
+        if (isLarge) {
+            zpl += `^XA^CI28^PW${pw}^LL${ll}^LH0,0`;
+            zpl += `^FO28,45^BQN,2,10^FDMA,${qrText}^FS`;
+            zpl += `^FO390,55^A0N,42,42^FB420,2,4,L,0^FD${mat}^FS`;
+            zpl += `^FO390,175^GB415,3,3^FS`;
+            zpl += `^FO390,200^A0N,50,50^FD${qty}^FS`;
+            zpl += `^FO390,275^GB415,3,3^FS`;
+            zpl += `^FO390,295^A0N,34,34^FD||^FS`;
+            zpl += `^FO390,345^GB415,3,3^FS`;
+            zpl += `^FO390,370^A0N,38,38^FB420,2,4,L,0^FD${lot}^FS`;
+            zpl += `^FO390,475^GB415,3,3^FS`;
+            zpl += `^FO390,500^A0N,36,36^FD${box}^FS`;
+            zpl += `^XZ\n`;
+        } else {
+            zpl += `^XA^CI28^PW${pw}^LL${ll}^LH0,0`;
+            zpl += `^FO18,20^BQN,2,6^FDMA,${qrText}^FS`;
+            zpl += `^FO230,22^A0N,28,28^FB280,2,2,L,0^FD${mat}^FS`;
+            zpl += `^FO230,78^GB280,2,2^FS`;
+            zpl += `^FO230,86^A0N,28,28^FD${qty}^FS`;
+            zpl += `^FO230,126^GB280,2,2^FS`;
+            zpl += `^FO230,132^A0N,22,22^FD||^FS`;
+            zpl += `^FO230,162^GB280,2,2^FS`;
+            zpl += `^FO230,168^A0N,22,22^FD${lot}^FS`;
+            zpl += `^FO230,198^GB280,2,2^FS`;
+            zpl += `^FO230,204^A0N,26,26^FD${box}^FS`;
+            zpl += `^XZ\n`;
+        }
+    });
+    return zpl;
+}
+
+async function dispatchEntryClientDirectPrint(labels, selectedPrinter, labelSize) {
+    if (!selectedPrinter || selectedPrinter === 'Browser Print') {
+        return { success: false, fallback_to_browser: true };
+    }
+    const printerEntry = entryClientPrintersRegistry.find(p => p.name.toLowerCase() === String(selectedPrinter || '').toLowerCase());
+
+    // 1. Zebra Browser Print Daemon on Client PC (127.0.0.1:9100/write)
+    if (printerEntry && printerEntry.source === 'zebra_browser_print' && printerEntry.device) {
+        try {
+            const zplData = buildZplForEntryZebra(labels, labelSize);
+            const res = await fetch('http://127.0.0.1:9100/write', {
+                method: 'POST',
+                mode: 'cors',
+                headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+                body: JSON.stringify({
+                    device: printerEntry.device,
+                    data: zplData
+                })
+            });
+            if (res.ok) {
+                return {
+                    success: true,
+                    message: `Đã gửi trực tiếp ${labels.length} tem đến máy in "${selectedPrinter}" qua Zebra Browser Print trên máy tính hiện tại.`
+                };
+            }
+        } catch (e) {}
+    }
+
+    // 2. QZ Tray on Client PC
+    if (printerEntry && printerEntry.source === 'qz_tray' && typeof window.qz !== 'undefined') {
+        try {
+            if (!window.qz.websocket.isActive()) {
+                await window.qz.websocket.connect({ retries: 0, delay: 0 });
+            }
+            const cfg = window.qz.configs.create(selectedPrinter);
+            const zplData = buildZplForEntryZebra(labels, labelSize);
+            await window.qz.print(cfg, [zplData]);
+            return {
+                success: true,
+                message: `Đã gửi trực tiếp ${labels.length} tem đến máy in "${selectedPrinter}" qua QZ Tray trên máy tính hiện tại.`
+            };
+        } catch (e) {}
+    }
+
+    return { success: false };
 }
 
 function promptAddEntryCustomPrinter() {
@@ -1139,12 +1307,68 @@ function executeEntryPrintSubmission() {
         document.getElementById('res_box_count').innerText = data.labels.length;
 
         if (getEntryPrintMode() === 'preview') {
+            logEntryPrintOperation({
+                printer: check.printer,
+                labelSize: check.labelSize,
+                printMode: 'preview',
+                resultStatus: 'DIRECT_SUCCESS',
+                details: 'Mở xem trước tem',
+                labelCount: data.labels.length
+            });
             openModal('modal_print_result');
-        } else if (data.direct_printed) {
-            resetFormForNext();
-        } else {
+        } else if (check.printer === 'Browser Print' || !check.printer) {
+            logEntryPrintOperation({
+                printer: 'Browser Print',
+                labelSize: check.labelSize,
+                printMode: 'browser',
+                resultStatus: 'BROWSER_DIALOG_FALLBACK',
+                details: 'Người dùng chọn chế độ In Qua Trình Duyệt thủ công',
+                labelCount: data.labels.length
+            });
             triggerDirectPrint(() => {
                 resetFormForNext();
+            });
+        } else if (data.direct_printed) {
+            logEntryPrintOperation({
+                printer: check.printer,
+                labelSize: check.labelSize,
+                printMode: 'direct',
+                resultStatus: 'DIRECT_SUCCESS',
+                details: data.direct_print_msg || 'In trực tiếp qua Windows Print Spooler thành công',
+                labelCount: data.labels.length
+            });
+            alert(`✓ Đã tự động in trực tiếp ${data.labels.length} tem (${check.labelSize}mm Ngang) đến máy in "${check.printer}".`);
+            resetFormForNext();
+        } else {
+            // Thử gửi trực tiếp qua client daemon (Zebra / QZ Tray)
+            dispatchEntryClientDirectPrint(data.labels, check.printer, check.labelSize).then(clientRes => {
+                if (clientRes && clientRes.success) {
+                    logEntryPrintOperation({
+                        printer: check.printer,
+                        labelSize: check.labelSize,
+                        printMode: 'direct',
+                        resultStatus: 'DIRECT_SUCCESS',
+                        details: clientRes.message || 'In trực tiếp qua Client Print Daemon thành công',
+                        labelCount: data.labels.length
+                    });
+                    alert(clientRes.message || `✓ Đã gửi trực tiếp ${data.labels.length} tem đến máy in "${check.printer}".`);
+                    resetFormForNext();
+                } else {
+                    // CHỈ mở Print Dialog khi in trực tiếp thất bại
+                    const reason = clientRes && clientRes.message ? clientRes.message : `Máy in "${check.printer}" không hỗ trợ in trực tiếp hoặc dịch vụ in không hoạt động.`;
+                    logEntryPrintOperation({
+                        printer: check.printer,
+                        labelSize: check.labelSize,
+                        printMode: 'direct',
+                        resultStatus: 'BROWSER_DIALOG_FALLBACK',
+                        details: reason + ' => Chuyển sang Print Dialog làm phương án dự phòng.',
+                        labelCount: data.labels.length
+                    });
+                    alert(`⚠️ Không thể in trực tiếp tới máy in "${check.printer}". Hệ thống sẽ mở hộp thoại In Trình Duyệt để bạn in tem.`);
+                    triggerDirectPrint(() => {
+                        resetFormForNext();
+                    });
+                }
             });
         }
     })
@@ -1161,41 +1385,6 @@ function executeEntryPrintSubmission() {
     });
 }
 
-document.getElementById('btn_submit_step').addEventListener('click', function() {
-    const check = validateEntryPrePrint();
-    if (!check.valid) {
-        alert('VUI LÒNG KIỂM TRA DỮ LIỆU TRƯỚC KHI IN:\n- ' + check.errors.join('\n- '));
-        return;
-    }
-
-    const printQty = currentCalculation.printQty;
-    const remaining = currentOrder.remaining_qty;
-
-    // Nếu có thùng lẻ và người dùng không tích chọn in lẻ
-    if (currentCalculation.hasOdd && !document.getElementById('chk_is_odd_box').checked) {
-        alert('Cảnh báo: Số lượng in (' + printQty + ') dư ' + currentCalculation.remainder + ' con lẻ không đủ 1 thùng chẵn. Vui lòng tích chọn ô "Cho phép in thùng lẻ" để tiếp tục!');
-        document.getElementById('chk_is_odd_box').focus();
-        return;
-    }
-
-    // Nếu in vượt số còn lại và chưa có admin/editor duyệt bằng MSNV + Mật khẩu + Lý do
-    if (printQty > remaining && (!verifiedAdminMsnv || !verifiedAdminPass || !verifiedOverrideReason)) {
-        document.getElementById('modal_req_qty').innerText = printQty.toLocaleString();
-        document.getElementById('modal_rem_qty').innerText = remaining.toLocaleString();
-        document.getElementById('modal_diff_qty').innerText = '+' + (printQty - remaining).toLocaleString() + ' con';
-        document.getElementById('input_admin_msnv').value = '';
-        document.getElementById('input_admin_pass').value = '';
-        document.getElementById('input_override_reason').value = '';
-        document.getElementById('admin_verify_feedback').innerText = '';
-        openModal('modal_admin_approval');
-        return;
-    }
-
-    // Tự động sinh tem và gửi lệnh in ngay sau khi nhấn "Xác nhận nhập và in tem"
-    executeEntryPrintSubmission();
-});
-
-// XÁC THỰC MSNV, MẬT KHẨU & LÝ DO ADMIN/EDITOR DUYỆT VƯỢT MỨC
 document.getElementById('btn_verify_and_proceed').addEventListener('click', function() {
     const msnv = document.getElementById('input_admin_msnv').value.trim();
     const pass = document.getElementById('input_admin_pass').value.trim();

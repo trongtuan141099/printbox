@@ -1181,7 +1181,7 @@ $exportParams = http_build_query([
                     <option value="1/2">Thùng loại 1/2</option>
                     <option value="1/4">Thùng loại 1/4</option>
                 </select>
-                <small class="text-muted">Hệ thống sẽ tự động tra cứu lại quy cách đóng gói (pack_qty) theo loại thùng đã chọn để tính số thùng chẵn/lẻ chính xác.</small>
+                
             </div>
 
             <div class="mb-3">
@@ -1248,12 +1248,21 @@ $exportParams = http_build_query([
             <div class="mb-3">
                 <div class="d-flex justify-content-between align-items-center mb-1">
                     <label class="form-label fw-bold mb-0">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
-                    <div class="d-flex gap-2">
+                    <div class="d-flex flex-wrap gap-1 align-items-center">
                         <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="promptAddClientCustomPrinter()" title="Khai báo thêm máy in đã cài đặt trên máy tính này">
-                            ➕ Thêm máy in
+                            ➕ Thêm
                         </button>
+                        <span class="text-muted" style="font-size:11px;">|</span>
+                        <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none text-danger" onclick="removeActiveSavedPrinter()" title="Xóa máy in đang chọn khỏi cấu hình">
+                            🗑️ Xóa
+                        </button>
+                        <span class="text-muted" style="font-size:11px;">|</span>
+                        <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none text-warning-emphasis" onclick="resetAllPrinterConfig()" title="Đặt lại toàn bộ cấu hình máy in trên máy tính này">
+                            ⚙️ Đặt lại
+                        </button>
+                        <span class="text-muted" style="font-size:11px;">|</span>
                         <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="refreshConnectedPrinters(true, true)" title="Quét lại máy in thực tế từ máy tính hiện tại">
-                            🔄 Làm mới
+                            🔄 Quét lại
                         </button>
                     </div>
                 </div>
@@ -1282,9 +1291,7 @@ $exportParams = http_build_query([
                     </div>
                 </div>
 
-                <small class="text-muted d-block mt-1">
-                    Chỉ hiển thị các máy in đang kết nối thực tế với máy tính hiện tại (Client PC). Lựa chọn được lưu làm <strong>mặc định</strong> theo người dùng và trình duyệt.
-                </small>
+
             </div>
 
             <!-- CHỌN KHỔ TEM IN -->
@@ -1294,9 +1301,7 @@ $exportParams = http_build_query([
                     <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang) - Mặc định xưởng</option>
                     <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (80 × 100 / 100 × 80 / 110 × 80 mm - Ngang)</option>
                 </select>
-                <small class="text-muted d-block mt-1">
-                    Lựa chọn kích thước tem trước khi in. Hệ thống tự động căn chỉnh tỷ lệ và khổ giấy ngang tương ứng.
-                </small>
+
             </div>
 
             <!-- TÙY CHỌN CHẾ ĐỘ IN: IN TRỰC TIẾP HOẶC XEM TRƯỚC -->
@@ -1805,9 +1810,15 @@ $exportParams = http_build_query([
             <div class="mb-3">
                 <div class="d-flex justify-content-between align-items-center mb-1">
                     <label class="form-label fw-bold mb-0">Chọn Máy In Tem Mặc Định:</label>
-                    <div class="d-flex gap-2">
+                    <div class="d-flex flex-wrap gap-2">
                         <button type="button" class="btn btn-sm btn-outline-primary" onclick="promptAddClientCustomPrinter()">
-                            ➕ Thêm máy in máy này
+                            ➕ Thêm máy in
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeActiveSavedPrinter()">
+                            🗑️ Xóa máy in đã lưu
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-warning" onclick="resetAllPrinterConfig()">
+                            ⚙️ Đặt lại cấu hình
                         </button>
                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshConnectedPrinters(true, true)">
                             🔄 Quét lại máy in
@@ -2120,6 +2131,79 @@ function saveClientCustomPrinters(list) {
     try {
         localStorage.setItem('printbox_client_custom_printers', JSON.stringify(list));
     } catch (e) {}
+}
+
+function removeActiveSavedPrinter() {
+    const ocSel = document.getElementById('offcanvas_printer_select');
+    const mdSel = document.getElementById('modal_printer_select');
+    const current = (ocSel ? ocSel.value : '') || (mdSel ? mdSel.value : '') || getSavedUserDefaultPrinter();
+    if (!current || current === 'Browser Print') {
+        alert('Vui lòng chọn máy in bạn muốn xóa khỏi danh sách cấu hình!');
+        return;
+    }
+    if (!confirm(`Bạn có chắc chắn muốn xóa cấu hình máy in "${current}" khỏi máy tính này không?`)) {
+        return;
+    }
+    // 1. Xóa khỏi danh sách máy in tùy chỉnh
+    const customList = getClientCustomPrinters().filter(p => p.name.toLowerCase() !== current.toLowerCase());
+    saveClientCustomPrinters(customList);
+
+    // 2. Xóa khỏi cấu hình máy in mặc định
+    try {
+        localStorage.removeItem('printbox_default_printer_u_' + currentUserId);
+        localStorage.removeItem('printbox_client_default_printer');
+        localStorage.removeItem('printbox_default_printer');
+        localStorage.removeItem('mes_default_printer');
+    } catch(e) {}
+
+    onDefaultPrinterChange('Browser Print');
+    refreshConnectedPrinters(true, true);
+    setPrinterStatusMessage(`✓ Đã xóa cấu hình máy in "${current}" khỏi máy tính này!`, 'success');
+}
+
+function resetAllPrinterConfig() {
+    if (!confirm("Bạn có chắc chắn muốn ĐẶT LẠI TOÀN BỘ cấu hình máy in trên máy tính này không?\n\n- Toàn bộ máy in tùy chỉnh đã thêm sẽ được xóa.\n- Cấu hình máy in mặc định sẽ được đặt lại.\n- Hệ thống sẽ quét lại từ đầu.")) {
+        return;
+    }
+    try {
+        localStorage.removeItem('printbox_default_printer_u_' + currentUserId);
+        localStorage.removeItem('printbox_client_default_printer');
+        localStorage.removeItem('printbox_default_printer');
+        localStorage.removeItem('printbox_client_custom_printers');
+        localStorage.removeItem('mes_default_printer');
+    } catch(e) {}
+
+    onDefaultPrinterChange('Browser Print');
+    refreshConnectedPrinters(true, true);
+    setPrinterStatusMessage('✓ Đã đặt lại toàn bộ cấu hình máy in trên máy tính này!', 'success');
+}
+
+function logPrintOperation({
+    user = (typeof currentUserName !== 'undefined' ? currentUserName : '') || 'User #' + currentUserId,
+    printer = '',
+    labelSize = '',
+    printMode = '',
+    resultStatus = '',
+    details = '',
+    labelCount = 0
+}) {
+    const timeStr = new Date().toLocaleString('vi-VN');
+    const badgeColor = resultStatus === 'DIRECT_SUCCESS' ? '#16a34a' :
+                       resultStatus === 'BROWSER_DIALOG_FALLBACK' ? '#d97706' : '#dc2626';
+    const statusText = resultStatus === 'DIRECT_SUCCESS' ? '✅ In trực tiếp thành công' :
+                       resultStatus === 'BROWSER_DIALOG_FALLBACK' ? '⚠️ Chuyển sang Print Dialog của trình duyệt' :
+                       resultStatus === 'PRINTER_NOT_FOUND' ? '❌ Không tìm thấy máy in' : '❌ Lỗi gửi lệnh in';
+
+    console.group(`%c[NHẬT KÝ IN TEM / PRINT LOG] - ${statusText} - ${timeStr}`, `color:${badgeColor};font-weight:bold;`);
+    console.log('👤 Người dùng:', user);
+    console.log('🖨️ Máy in được chọn:', printer || '(Chưa chọn máy in)');
+    console.log('📐 Khổ tem:', labelSize || 'Mặc định');
+    console.log('⚙️ Chế độ in:', printMode || 'direct');
+    console.log('⏰ Thời gian in:', timeStr);
+    console.log('📦 Số lượng tem:', labelCount);
+    console.log('📊 Kết quả gửi lệnh in:', statusText);
+    if (details) console.log('📝 Chi tiết / Lý do:', details);
+    console.groupEnd();
 }
 
 function promptAddClientCustomPrinter() {
@@ -3361,25 +3445,67 @@ function handlePrintJobSuccess(data, selectedPrinter) {
     const mode = getActivePrintMode();
     if (mode === 'preview') {
         // Người dùng chủ động chọn chế độ Xem trước (Preview)
+        logPrintOperation({
+            printer: selectedPrinter,
+            labelSize: getActiveLabelSize(),
+            printMode: 'preview',
+            resultStatus: 'DIRECT_SUCCESS',
+            details: 'Người dùng mở modal xem trước tem trước khi in',
+            labelCount: data.labels.length
+        });
         openModal('modal_print_result');
         return;
     }
 
     // Chế độ In trực tiếp hoặc In qua trình duyệt
     if (selectedPrinter === 'Browser Print' || selectedPrinter === '') {
-        // Fallback tự động: gọi in trình duyệt trên Standalone Print Zone tại Client PC
+        logPrintOperation({
+            printer: 'Browser Print',
+            labelSize: getActiveLabelSize(),
+            printMode: 'browser',
+            resultStatus: 'BROWSER_DIALOG_FALLBACK',
+            details: 'Người dùng chọn chế độ In Qua Trình Duyệt thủ công',
+            labelCount: data.labels.length
+        });
         autoDispatchPrint();
     } else if (data.direct_printed) {
+        logPrintOperation({
+            printer: selectedPrinter,
+            labelSize: getActiveLabelSize(),
+            printMode: 'direct',
+            resultStatus: 'DIRECT_SUCCESS',
+            details: data.direct_print_msg || 'In trực tiếp qua Windows Print Spooler thành công',
+            labelCount: data.labels.length
+        });
         showDirectPrintToast(
             `Đã tự động in ${data.labels.length} tem (${getActiveLabelSize() === '110x80' ? '80×100 / 100×80mm Ngang' : '65×30mm Ngang'}) đến máy in "${selectedPrinter}".`,
             true
         );
     } else {
+        // Thử gửi trực tiếp qua dịch vụ Client (Zebra Browser Print / QZ Tray / WebUSB)
         dispatchClientDirectPrint(data.labels, selectedPrinter, getActiveLabelSize()).then(clientRes => {
             if (clientRes && clientRes.success) {
+                logPrintOperation({
+                    printer: selectedPrinter,
+                    labelSize: getActiveLabelSize(),
+                    printMode: 'direct',
+                    resultStatus: 'DIRECT_SUCCESS',
+                    details: clientRes.message || 'In trực tiếp qua Client Print Daemon thành công',
+                    labelCount: data.labels.length
+                });
                 showDirectPrintToast(clientRes.message, true);
             } else {
-                // Fallback: tự động gọi in trình duyệt trên Standalone Print Zone tại Client PC
+                // CHỈ mở Print Dialog khi in trực tiếp thất bại
+                const reason = clientRes && clientRes.message ? clientRes.message : `Máy in "${selectedPrinter}" không có dịch vụ in trực tiếp chạy trên máy tính này.`;
+                logPrintOperation({
+                    printer: selectedPrinter,
+                    labelSize: getActiveLabelSize(),
+                    printMode: 'direct',
+                    resultStatus: 'BROWSER_DIALOG_FALLBACK',
+                    details: reason + ' => Chuyển sang Print Dialog làm phương án dự phòng.',
+                    labelCount: data.labels.length
+                });
+                showDirectPrintToast(`⚠️ Không thể in trực tiếp tới "${selectedPrinter}". Đang chuyển sang In Qua Trình Duyệt...`, false);
                 autoDispatchPrint();
             }
         });
@@ -4297,6 +4423,9 @@ window.getActiveLabelSize         = getActiveLabelSize;
 window.savePrinterFromModal       = savePrinterFromModal;
 window.refreshConnectedPrinters       = refreshConnectedPrinters;
 window.promptAddClientCustomPrinter = promptAddClientCustomPrinter;
+window.removeActiveSavedPrinter    = removeActiveSavedPrinter;
+window.resetAllPrinterConfig        = resetAllPrinterConfig;
+window.logPrintOperation            = logPrintOperation;
 window.activateBrowserPrintFallback   = activateBrowserPrintFallback;
 window.openPrinterSetupGuideModal     = openPrinterSetupGuideModal;
 window.testLocalhostPrintServiceFromGuide = testLocalhostPrintServiceFromGuide;

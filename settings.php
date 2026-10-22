@@ -182,9 +182,15 @@ require_once __DIR__ . '/includes/header.php';
         <div class="card shadow-sm mb-3 border-primary">
             <div class="card-header bg-white py-2 px-3 d-flex justify-content-between align-items-center">
                 <span class="card-title fw-bold text-primary m-0">🖨️ Cấu Hình Máy In Tem Sử Dụng Mặc Định</span>
-                <div class="d-flex gap-2">
+                <div class="d-flex flex-wrap gap-2">
                     <button type="button" class="btn btn-sm btn-outline-primary" onclick="promptAddSettingsCustomPrinter()">
-                        ➕ Thêm máy in máy này
+                        ➕ Thêm máy in
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeSettingsSavedPrinter()">
+                        🗑️ Xóa máy in đã lưu
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-warning" onclick="resetSettingsPrinterConfig()">
+                        ⚙️ Đặt lại cấu hình
                     </button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshSettingsClientPrinters(true, true)">
                         🔄 Quét lại máy in
@@ -422,6 +428,46 @@ function saveSettingsCustomPrinters(list) {
     try {
         localStorage.setItem('printbox_client_custom_printers', JSON.stringify(list));
     } catch (e) {}
+}
+
+function removeSettingsSavedPrinter() {
+    const sel = document.getElementById('settings_default_printer');
+    const current = (sel ? sel.value : '') || getSettingsSavedDefaultPrinter();
+    if (!current || current === 'Browser Print') {
+        alert('Vui lòng chọn máy in bạn muốn xóa khỏi danh sách cấu hình!');
+        return;
+    }
+    if (!confirm(`Bạn có chắc chắn muốn xóa cấu hình máy in "${current}" khỏi máy tính này không?`)) {
+        return;
+    }
+    const customList = getSettingsCustomPrinters().filter(p => p.name.toLowerCase() !== current.toLowerCase());
+    saveSettingsCustomPrinters(customList);
+
+    try {
+        localStorage.removeItem('printbox_default_printer_u_' + settingsCurrentUserId);
+        localStorage.removeItem('printbox_client_default_printer');
+        localStorage.removeItem('printbox_default_printer');
+        localStorage.removeItem('mes_default_printer');
+    } catch(e) {}
+
+    refreshSettingsClientPrinters(true, true);
+    setSettingsPrinterMsg(`✓ Đã xóa cấu hình máy in "${current}" khỏi máy tính này!`, '#15803d');
+}
+
+function resetSettingsPrinterConfig() {
+    if (!confirm("Bạn có chắc chắn muốn ĐẶT LẠI TOÀN BỘ cấu hình máy in trên máy tính này không?\n\n- Toàn bộ máy in tùy chỉnh đã thêm sẽ được xóa.\n- Cấu hình máy in mặc định sẽ được đặt lại.\n- Hệ thống sẽ quét lại từ đầu.")) {
+        return;
+    }
+    try {
+        localStorage.removeItem('printbox_default_printer_u_' + settingsCurrentUserId);
+        localStorage.removeItem('printbox_client_default_printer');
+        localStorage.removeItem('printbox_default_printer');
+        localStorage.removeItem('printbox_client_custom_printers');
+        localStorage.removeItem('mes_default_printer');
+    } catch(e) {}
+
+    refreshSettingsClientPrinters(true, true);
+    setSettingsPrinterMsg('✓ Đã đặt lại toàn bộ cấu hình máy in trên máy tính này!', '#15803d');
 }
 
 function promptAddSettingsCustomPrinter() {
