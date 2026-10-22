@@ -447,16 +447,21 @@ async function refreshSettingsClientPrinters(showFeedback = false) {
         });
     };
 
-    const basePath = (window.location.pathname || '/printbox/settings.php').replace(/settings\.php.*$/, 'orders.php');
-    const localUrls = [
-        'http://127.0.0.1:9100/available',
-        'http://127.0.0.1' + basePath + '?action=client_local_printers',
-        'http://localhost' + basePath + '?action=client_local_printers'
-    ];
+    const isLocalWorkstation = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname || '');
+    const isHttps = (window.location.protocol === 'https:');
+    const zebraUrl = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
+
+    // Only query loopback web server if client is running directly on localhost
+    const localUrls = [zebraUrl];
+    if (isLocalWorkstation) {
+        const basePath = (window.location.pathname || '/printbox/settings.php').replace(/settings\.php.*$/, 'orders.php');
+        localUrls.push('http://127.0.0.1' + basePath + '?action=client_local_printers');
+    }
+
     for (const url of localUrls) {
         try {
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 1400);
+            const timer = setTimeout(() => ctrl.abort(), 600);
             const res = await fetch(url, { method: 'GET', mode: 'cors', signal: ctrl.signal });
             clearTimeout(timer);
             if (!res.ok) continue;
@@ -469,9 +474,10 @@ async function refreshSettingsClientPrinters(showFeedback = false) {
                     default: Boolean(typeof p === 'object' && p !== null && p.default)
                 })));
             }
-        } catch (e) {}
+        } catch (e) {
+            // Suppress connection refused exceptions
+        }
     }
-
     if (merged.size === 0) {
         try {
             const fd = new FormData();
@@ -516,11 +522,11 @@ async function refreshSettingsClientPrinters(showFeedback = false) {
 
     if (discovered.length === 0) {
         const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = '⚠️ Không tìm thấy máy in trên máy tính hiện tại';
+        opt.value = 'Browser Print';
+        opt.textContent = '🖨️ In Qua Trình Duyệt (Mặc định)';
+        opt.selected = true;
         sel.appendChild(opt);
-        sel.value = '';
-        setSettingsPrinterMsg(SETTINGS_NO_PRINTER_MSG, '#b91c1c');
+        setSettingsPrinterMsg('Không phát hiện dịch vụ máy in cục bộ. Hệ thống sẽ tự động dùng In Qua Trình Duyệt.', '#2563eb');
     } else {
         if (savedMissing || !selectedPrinter) {
             const promptOpt = document.createElement('option');

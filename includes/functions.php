@@ -833,7 +833,7 @@ function saveDefaultPrinter($printerName, PDO $pdo = null) {
         @session_start();
     }
     $printerName = trim((string)$printerName);
-    if ($printerName === '') {
+    if ($printerName === '' || strcasecmp($printerName, 'Browser Print') === 0) {
         return false;
     }
 
@@ -1020,6 +1020,16 @@ function dispatchWindowsDirectPrint(array $labels, $printerName, $labelSize = '6
             'success'       => false,
             'message'       => 'Thiếu dữ liệu tem hoặc chưa chọn máy in.',
             'pages_printed' => 0
+        ];
+    }
+
+    if (strcasecmp($printerName, 'Browser Print') === 0) {
+        return [
+            'success'         => false,
+            'browser_print'   => true,
+            'client_dispatch' => true,
+            'message'         => 'Sử dụng chế độ In Qua Trình Duyệt trên máy tính hiện tại.',
+            'pages_printed'   => 0
         ];
     }
 

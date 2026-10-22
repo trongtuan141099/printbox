@@ -588,17 +588,22 @@ async function discoverEntryClientPrinters() {
         });
     };
 
-    // Probe Zebra Browser Print & Client Local Print Service on Client PC (127.0.0.1 / localhost)
-    const basePath = (window.location.pathname || '/printbox/print_entry.php').replace(/print_entry\.php.*$/, 'orders.php');
-    const localUrls = [
-        'http://127.0.0.1:9100/available',
-        'http://127.0.0.1' + basePath + '?action=client_local_printers',
-        'http://localhost' + basePath + '?action=client_local_printers'
-    ];
+    // Probe Zebra Browser Print & Client Local Print Service on Client PC
+    const isLocalWorkstation = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname || '');
+    const isHttps = (window.location.protocol === 'https:');
+    const zebraUrl = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
+
+    // Only query loopback web server if client is running directly on localhost
+    const localUrls = [zebraUrl];
+    if (isLocalWorkstation) {
+        const basePath = (window.location.pathname || '/printbox/print_entry.php').replace(/print_entry\.php.*$/, 'orders.php');
+        localUrls.push('http://127.0.0.1' + basePath + '?action=client_local_printers');
+    }
+
     for (const url of localUrls) {
         try {
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 1400);
+            const timer = setTimeout(() => ctrl.abort(), 600);
             const res = await fetch(url, { method: 'GET', mode: 'cors', signal: ctrl.signal });
             clearTimeout(timer);
             if (!res.ok) continue;
@@ -612,9 +617,10 @@ async function discoverEntryClientPrinters() {
                     source: 'client_local_service'
                 })));
             }
-        } catch (e) {}
+        } catch (e) {
+            // Suppress connection refused exceptions
+        }
     }
-
     if (merged.size === 0) {
         try {
             const fd = new FormData();
@@ -669,11 +675,11 @@ async function refreshEntryClientPrinters(showFeedback = false) {
 
     if (discovered.length === 0) {
         const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = '⚠️ Không tìm thấy máy in trên máy tính hiện tại';
+        opt.value = 'Browser Print';
+        opt.textContent = '🖨️ In Qua Trình Duyệt (Mặc định)';
+        opt.selected = true;
         sel.appendChild(opt);
-        sel.value = '';
-        setEntryPrinterMsg(ENTRY_NO_PRINTER_MSG, '#b91c1c');
+        setEntryPrinterMsg('Không phát hiện dịch vụ máy in cục bộ. Bạn vẫn có thể sử dụng In Qua Trình Duyệt.', '#2563eb');
     } else {
         if (savedMissing || !selectedPrinter) {
             const promptOpt = document.createElement('option');

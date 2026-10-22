@@ -380,9 +380,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && in_array
         $printers = getConnectedPrinters(true);
         $defPrinter = getDefaultPrinter($pdo, true);
         echo json_encode([
-            'success'         => true,
-            'printers'        => array_values($printers),
-            'default_printer' => $defPrinter
+            'success'           => true,
+            'service_available' => !empty($printers),
+            'is_local_machine'  => isClientLocalMachine(),
+            'printers'          => array_values($printers),
+            'default_printer'   => $defPrinter
         ], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -1246,14 +1248,35 @@ $exportParams = http_build_query([
             <div class="mb-3">
                 <div class="d-flex justify-content-between align-items-center mb-1">
                     <label class="form-label fw-bold mb-0">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
-                    <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="refreshConnectedPrinters(true)" title="Quét lại danh sách máy in đang kết nối trên máy tính hiện tại">
+                    <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="refreshConnectedPrinters(true)" title="Kiểm tra kết nối dịch vụ in và làm mới danh sách máy in trên máy tính hiện tại">
                         🔄 Làm mới máy in
                     </button>
                 </div>
                 <select id="offcanvas_printer_select" class="form-select border-primary fw-bold" onchange="onDefaultPrinterChange(this.value)">
-                    <option value="">⏳ Đang tải danh sách máy in trên máy tính hiện tại...</option>
+                    <option value="Browser Print">⏳ Đang kiểm tra dịch vụ máy in trên máy tính hiện tại...</option>
                 </select>
                 <div id="offcanvas_printer_status_msg" class="mt-1 small fw-bold" style="display:none;"></div>
+
+                <!-- THÔNG BÁO THÂN THIỆN & FALLBACK KHI KHÔNG TÌM THẤY DỊCH VỤ IN CỤC BỘ -->
+                <div id="offcanvas_no_service_panel" class="alert alert-warning border-warning p-2 mt-2 mb-0" style="display:none; background:#fffbeb; border-radius:8px;">
+                    <div class="fw-bold text-warning-emphasis mb-1" style="font-size:0.9rem;">
+                        ⚠️ Không phát hiện dịch vụ máy in cục bộ trên máy tính này
+                    </div>
+                    <div class="small text-dark mb-2" style="line-height:1.45;">
+                        Không phát hiện dịch vụ máy in cục bộ trên máy tính này.<br>
+                        Bạn vẫn có thể sử dụng chức năng In Qua Trình Duyệt.<br>
+                        Để sử dụng In Trực Tiếp, vui lòng cài đặt phần mềm hỗ trợ in.
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-dark fw-bold" onclick="openPrinterSetupGuideModal()">
+                            📖 Hướng Dẫn Cài Đặt
+                        </button>
+                        <button type="button" class="btn btn-sm btn-primary fw-bold" onclick="activateBrowserPrintFallback(true)">
+                            🖨️ In Qua Trình Duyệt
+                        </button>
+                    </div>
+                </div>
+
                 <small class="text-muted d-block mt-1">
                     Chỉ hiển thị các máy in đang kết nối thực tế với máy tính hiện tại (Client PC). Lựa chọn được lưu làm <strong>mặc định</strong> theo người dùng và trình duyệt.
                 </small>
@@ -1782,9 +1805,29 @@ $exportParams = http_build_query([
                     </button>
                 </div>
                 <select id="modal_printer_select" class="form-select form-select-lg fw-bold border-primary">
-                    <option value="">⏳ Đang tải danh sách máy in trên máy tính hiện tại...</option>
+                    <option value="Browser Print">⏳ Đang kiểm tra dịch vụ máy in trên máy tính hiện tại...</option>
                 </select>
                 <div id="printer_config_feedback" class="mt-2 small fw-bold"></div>
+
+                <!-- THÔNG BÁO THÂN THIỆN KHI KHÔNG TÌM THẤY DỊCH VỤ IN CỤC BỘ TRONG MODAL -->
+                <div id="modal_no_service_panel" class="alert alert-warning border-warning p-2 mt-2 mb-0" style="display:none; background:#fffbeb; border-radius:8px;">
+                    <div class="fw-bold text-warning-emphasis mb-1" style="font-size:0.9rem;">
+                        ⚠️ Không phát hiện dịch vụ máy in cục bộ trên máy tính này
+                    </div>
+                    <div class="small text-dark mb-2" style="line-height:1.45;">
+                        Không phát hiện dịch vụ máy in cục bộ trên máy tính này.<br>
+                        Bạn vẫn có thể sử dụng chức năng In Qua Trình Duyệt.<br>
+                        Để sử dụng In Trực Tiếp, vui lòng cài đặt phần mềm hỗ trợ in.
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-dark fw-bold" onclick="openPrinterSetupGuideModal()">
+                            📖 Hướng Dẫn Cài Đặt
+                        </button>
+                        <button type="button" class="btn btn-sm btn-primary fw-bold" onclick="activateBrowserPrintFallback(true); closeModal('modal_printer_config');">
+                            🖨️ In Qua Trình Duyệt
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <!-- CHỌN KHỔ TEM MẶC ĐỊNH -->
@@ -1802,6 +1845,53 @@ $exportParams = http_build_query([
             <button type="button" class="btn btn-primary fw-bold" id="btn_save_printer_config" onclick="savePrinterFromModal()">
                 💾 Lưu Làm Máy In Mặc Định
             </button>
+        </div>
+    </div>
+</div>
+
+<!-- =======================================================
+     MODAL 10: HƯỚNG DẪN CÀI ĐẶT DỊCH VỤ MÁY IN CỤC BỘ TRÊN CLIENT PC
+     ======================================================= -->
+<div id="modal_printer_setup_guide" class="modal-overlay">
+    <div class="modal-dialog" style="max-width: 600px;">
+        <div class="modal-header bg-primary text-white">
+            <span class="modal-title fw-bold">📖 Hướng Dẫn Cài Đặt Dịch Vụ Hỗ Trợ In Cục Bộ</span>
+            <button type="button" class="modal-close text-white" onclick="closeModal('modal_printer_setup_guide')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="alert alert-info py-2 px-3 mb-3 small">
+                Để sử dụng tính năng <strong>In Trực Tiếp (Silent / Direct Print)</strong> không qua hộp thoại trình duyệt trên máy tính trạm, vui lòng thực hiện theo một trong các cách dưới đây:
+            </div>
+
+            <div class="mb-3 p-3 border rounded bg-light">
+                <div class="fw-bold text-primary mb-1">Cách 1: Cài đặt Zebra Browser Print / QZ Tray (Khuyên dùng cho máy in Zebra/ZDesigner)</div>
+                <ol class="small mb-0 ps-3" style="line-height: 1.55;">
+                    <li>Cắm cáp USB hoặc kết nối mạng LAN cho máy in tem (vd: <strong>ZDesigner ZD621</strong>, <strong>Zebra GK420D</strong>, <strong>80x110</strong>, <strong>65x30</strong>) và cài đặt Driver máy in trên Windows.</li>
+                    <li>Cài đặt và khởi chạy phần mềm <strong>Zebra Browser Print</strong> (chạy ngầm ở cổng <code>127.0.0.1:9100</code>) hoặc <strong>QZ Tray</strong> trên máy tính này.</li>
+                    <li>Sau khi bật phần mềm, nhấn nút <strong>"🔍 Kiểm Tra Dịch Vụ In Cục Bộ"</strong> bên dưới để hệ thống nhận diện danh sách máy in.</li>
+                </ol>
+            </div>
+
+            <div class="mb-3 p-3 border rounded bg-light">
+                <div class="fw-bold text-success mb-1">Cách 2: Sử dụng trực tiếp chức năng "In Qua Trình Duyệt" (Không cần cài phần mềm phụ trợ)</div>
+                <ul class="small mb-0 ps-3" style="line-height: 1.55;">
+                    <li>Nếu máy tính chưa cài phần mềm hỗ trợ in cục bộ, hệ thống <strong>tự động chuyển sang chế độ In Qua Trình Duyệt</strong>.</li>
+                    <li>Khi nhấn <strong>"📥 Xác Nhận Nhập &amp; In Tem Thùng"</strong>, hộp thoại in chuẩn của trình duyệt sẽ tự động mở ra với đúng khổ tem (<code>65×30mm</code> hoặc <code>80×100 / 100×80mm</code>). Bạn chỉ cần chọn máy in của máy tính và nhấn <strong>Print (In)</strong>.</li>
+                </ul>
+            </div>
+
+            <div id="setup_guide_probe_feedback" class="small fw-bold mt-2"></div>
+        </div>
+        <div class="modal-footer d-flex justify-content-between">
+            <button type="button" class="btn btn-outline-primary fw-bold" id="btn_probe_local_agent" onclick="testLocalhostPrintServiceFromGuide()">
+                🔍 Kiểm Tra Dịch Vụ In Cục Bộ
+            </button>
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-primary fw-bold" onclick="activateBrowserPrintFallback(true); closeModal('modal_printer_setup_guide');">
+                    🖨️ Dùng Chế Độ In Qua Trình Duyệt
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('modal_printer_setup_guide')">Đóng</button>
+            </div>
         </div>
     </div>
 </div>
@@ -1926,6 +2016,15 @@ if (offcanvasPrintElement) {
 const currentUserId = <?= (int)$currentUserId ?>;
 let serverUserDefaultPrinter = <?= json_encode($defaultPrinter, JSON_UNESCAPED_UNICODE) ?: '""' ?>;
 let clientPrintersRegistry = []; // Stores discovered printers on the Client PC: { name, default, source, device }
+let isLocalPrintServiceProbed = false;
+let isLocalPrintServiceAvailable = null;
+let isProbingPrinters = false;
+
+// Check whether current page is running directly on localhost/local server machine
+function isCurrentPageOnLocalhost() {
+    const h = window.location.hostname || '';
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
 
 const NO_PRINTER_MESSAGE = 'Không tìm thấy máy in trên máy tính hiện tại. Vui lòng kiểm tra dịch vụ in hoặc kết nối máy in.';
 
@@ -2094,33 +2193,31 @@ function savePrinterFromModal() {
 
 // 1. Probe Zebra Browser Print on Client PC (127.0.0.1:9100 / 9101)
 async function probeZebraBrowserPrintClient() {
-    const endpoints = [
-        'http://127.0.0.1:9100/available',
-        'http://localhost:9100/available',
-        'https://127.0.0.1:9101/available'
-    ];
-    for (const url of endpoints) {
-        try {
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 900);
-            const res = await fetch(url, { method: 'GET', mode: 'cors', signal: ctrl.signal });
-            clearTimeout(timer);
-            if (!res.ok) continue;
-            const data = await res.json();
-            const list = [];
-            if (data && Array.isArray(data.printer)) {
-                data.printer.forEach(p => {
-                    if (p && p.name && !isVirtualPrinterNameJS(p.name)) {
-                        list.push({ name: String(p.name).trim(), default: false, source: 'zebra_browser_print', device: p });
-                    }
-                });
-            } else if (data && data.device && data.device.name && !isVirtualPrinterNameJS(data.device.name)) {
-                list.push({ name: String(data.device.name).trim(), default: true, source: 'zebra_browser_print', device: data.device });
-            }
-            if (list.length > 0) return list;
-        } catch (e) {}
+    // Only probe the appropriate endpoint according to current protocol to avoid connection refused
+    const isHttps = (window.location.protocol === 'https:');
+    const endpoint = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 600);
+        const res = await fetch(endpoint, { method: 'GET', mode: 'cors', signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!res.ok) return [];
+        const data = await res.json();
+        const list = [];
+        if (data && Array.isArray(data.printer)) {
+            data.printer.forEach(p => {
+                if (p && p.name && !isVirtualPrinterNameJS(p.name)) {
+                    list.push({ name: String(p.name).trim(), default: false, source: 'zebra_browser_print', device: p });
+                }
+            });
+        } else if (data && data.device && data.device.name && !isVirtualPrinterNameJS(data.device.name)) {
+            list.push({ name: String(data.device.name).trim(), default: true, source: 'zebra_browser_print', device: data.device });
+        }
+        return list;
+    } catch (e) {
+        // Completely suppress technical connection exceptions when Zebra Browser Print is not installed
+        return [];
     }
-    return [];
 }
 
 // 2. Probe QZ Tray on Client PC (ws://127.0.0.1:8182 / wss://127.0.0.1:8181)
@@ -2144,16 +2241,19 @@ async function probeQzTrayClient() {
 
 // 3. Probe Client Local Print Service on Client PC (127.0.0.1 / localhost)
 async function probeClientLocalPrintService() {
+    // Only query loopback web server if running directly on localhost / development server.
+    // Remote LAN Client PCs do NOT run an Apache/PHP web server; querying loopback on them triggers ERR_CONNECTION_REFUSED.
+    if (!isCurrentPageOnLocalhost()) {
+        return [];
+    }
     const pathname = window.location.pathname || '/printbox/orders.php';
     const localUrls = [
-        'http://127.0.0.1:18181/printers',
-        'http://127.0.0.1' + pathname + '?action=client_local_printers',
-        'http://localhost' + pathname + '?action=client_local_printers'
+        'http://127.0.0.1' + pathname + '?action=client_local_printers'
     ];
     for (const url of localUrls) {
         try {
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 1800);
+            const timer = setTimeout(() => ctrl.abort(), 800);
             const res = await fetch(url, { method: 'GET', mode: 'cors', signal: ctrl.signal });
             clearTimeout(timer);
             if (!res.ok) continue;
@@ -2172,7 +2272,9 @@ async function probeClientLocalPrintService() {
                 }
             });
             if (parsed.length > 0) return parsed;
-        } catch (e) {}
+        } catch (e) {
+            // Suppress connection refused exceptions
+        }
     }
     return [];
 }
@@ -2199,14 +2301,19 @@ async function probeWebUsbPrintersClient() {
 }
 
 // 5. Discover all available printers strictly on the Client PC
-async function discoverClientPrinters() {
+async function discoverClientPrinters(forceRefresh = false) {
+    // Circuit breaker / cache check: If already probed and service is unavailable, do not probe loopback repeatedly
+    if (!forceRefresh && isLocalPrintServiceProbed && !isLocalPrintServiceAvailable) {
+        return clientPrintersRegistry.filter(p => p.name !== 'Browser Print');
+    }
+
     const mergedMap = new Map();
     const addPrinters = (list) => {
         if (!Array.isArray(list)) return;
         list.forEach(item => {
             if (!item || !item.name) return;
             const name = String(item.name).trim();
-            if (!name || isVirtualPrinterNameJS(name)) return;
+            if (!name || isVirtualPrinterNameJS(name) || name === 'Browser Print') return;
             const key = name.toLowerCase();
             if (!mergedMap.has(key)) {
                 mergedMap.set(key, item);
@@ -2216,19 +2323,21 @@ async function discoverClientPrinters() {
         });
     };
 
-    const [zebraList, localSvcList, qzList, usbList] = await Promise.all([
-        probeZebraBrowserPrintClient(),
-        probeClientLocalPrintService(),
-        probeQzTrayClient(),
-        probeWebUsbPrintersClient()
-    ]);
+    try {
+        const [zebraList, localSvcList, qzList, usbList] = await Promise.all([
+            probeZebraBrowserPrintClient(),
+            probeClientLocalPrintService(),
+            probeQzTrayClient(),
+            probeWebUsbPrintersClient()
+        ]);
 
-    addPrinters(zebraList);
-    addPrinters(localSvcList);
-    addPrinters(qzList);
-    addPrinters(usbList);
+        addPrinters(zebraList);
+        addPrinters(localSvcList);
+        addPrinters(qzList);
+        addPrinters(usbList);
+    } catch (e) {}
 
-    // If direct loopback probes found none (e.g. Client PC accessed via LAN hostname where server can query Client PC by REMOTE_ADDR), call client-filtered refresh_printers
+    // If loopback probes found none, check via server session / remote client query (orders.php)
     if (mergedMap.size === 0) {
         try {
             const fd = new FormData();
@@ -2250,97 +2359,177 @@ async function discoverClientPrinters() {
         } catch (e) {}
     }
 
+    isLocalPrintServiceProbed = true;
+    isLocalPrintServiceAvailable = (mergedMap.size > 0);
+
     return Array.from(mergedMap.values());
 }
 
-async function refreshConnectedPrinters(showUserFeedback = false) {
-    if (showUserFeedback) {
-        setPrinterStatusMessage('⏳ Đang quét các máy in kết nối trên máy tính hiện tại...', 'info');
-    }
+async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh = false) {
+    if (isProbingPrinters) return;
+    isProbingPrinters = true;
 
-    const discovered = await discoverClientPrinters();
-    clientPrintersRegistry = discovered;
-    const printerNames = discovered.map(p => p.name);
-    const savedPrinter = getSavedUserDefaultPrinter();
-
-    let selectedPrinter = '';
-    let savedPrinterMissing = false;
-
-    if (printerNames.length > 0) {
-        if (savedPrinter) {
-            // Match case-insensitively with discovered client printers
-            const matched = discovered.find(p => p.name.toLowerCase() === savedPrinter.toLowerCase());
-            if (matched) {
-                selectedPrinter = matched.name;
-            } else {
-                // Saved printer no longer exists on this Client PC -> require user to select again
-                selectedPrinter = '';
-                savedPrinterMissing = true;
-            }
-        } else {
-            // First time for this user/browser: auto-pick OS default or first available client printer
-            const osDef = discovered.find(p => p.default) || discovered[0];
-            if (osDef) {
-                selectedPrinter = osDef.name;
-                onDefaultPrinterChange(selectedPrinter, false);
-            }
+    try {
+        if (showUserFeedback) {
+            setPrinterStatusMessage('⏳ Đang quét các máy in kết nối trên máy tính hiện tại...', 'info');
         }
-    }
 
-    ['offcanvas_printer_select', 'modal_printer_select'].forEach(selId => {
-        const sel = document.getElementById(selId);
-        if (!sel) return;
-        sel.innerHTML = '';
+        const discovered = await discoverClientPrinters(forceRefresh);
+        const printerNames = discovered.map(p => p.name);
+        const savedPrinter = getSavedUserDefaultPrinter();
 
-        if (discovered.length === 0) {
-            const opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = '⚠️ Không tìm thấy máy in trên máy tính hiện tại';
-            sel.appendChild(opt);
-            sel.value = '';
-        } else {
-            if (savedPrinterMissing || !selectedPrinter) {
-                const promptOpt = document.createElement('option');
-                promptOpt.value = '';
-                promptOpt.textContent = savedPrinterMissing
-                    ? `-- Máy in "${savedPrinter}" không còn kết nối, vui lòng chọn lại --`
-                    : '-- Chọn máy in trên máy tính hiện tại --';
-                promptOpt.selected = true;
-                sel.appendChild(promptOpt);
-            }
+        let selectedPrinter = '';
+        let savedPrinterMissing = false;
 
-            discovered.forEach(pObj => {
-                const opt = document.createElement('option');
-                opt.value = pObj.name;
-                opt.textContent = '🖨️ ' + pObj.name + (pObj.default ? ' (Mặc định máy trạm)' : '');
-                if (selectedPrinter && pObj.name === selectedPrinter) {
-                    opt.selected = true;
+        if (printerNames.length > 0) {
+            clientPrintersRegistry = discovered;
+            if (savedPrinter && savedPrinter !== 'Browser Print') {
+                const matched = discovered.find(p => p.name.toLowerCase() === savedPrinter.toLowerCase());
+                if (matched) {
+                    selectedPrinter = matched.name;
+                } else {
+                    selectedPrinter = '';
+                    savedPrinterMissing = true;
                 }
+            } else {
+                const osDef = discovered.find(p => p.default) || discovered[0];
+                if (osDef) {
+                    selectedPrinter = osDef.name;
+                    onDefaultPrinterChange(selectedPrinter, false);
+                }
+            }
+        } else {
+            // FALLBACK TỰ ĐỘNG SANG "IN QUA TRÌNH DUYỆT" KHI KHÔNG CÓ DỊCH VỤ IN CỤC BỘ
+            clientPrintersRegistry = [{ name: 'Browser Print', default: true, source: 'browser_print' }];
+            selectedPrinter = 'Browser Print';
+        }
+
+        const isFallback = (discovered.length === 0);
+
+        // Hiển thị hoặc ẩn panel thông báo thân thiện
+        const offPanel = document.getElementById('offcanvas_no_service_panel');
+        if (offPanel) offPanel.style.display = isFallback ? 'block' : 'none';
+        const modalPanel = document.getElementById('modal_no_service_panel');
+        if (modalPanel) modalPanel.style.display = isFallback ? 'block' : 'none';
+
+        ['offcanvas_printer_select', 'modal_printer_select'].forEach(selId => {
+            const sel = document.getElementById(selId);
+            if (!sel) return;
+            sel.innerHTML = '';
+
+            if (isFallback) {
+                const opt = document.createElement('option');
+                opt.value = 'Browser Print';
+                opt.textContent = '🖨️ In Qua Trình Duyệt (Mặc định)';
+                opt.selected = true;
                 sel.appendChild(opt);
-            });
+                sel.value = 'Browser Print';
+            } else {
+                if (savedPrinterMissing || !selectedPrinter) {
+                    const promptOpt = document.createElement('option');
+                    promptOpt.value = '';
+                    promptOpt.textContent = savedPrinterMissing
+                        ? `-- Máy in "${savedPrinter}" không còn kết nối, vui lòng chọn lại --`
+                        : '-- Chọn máy in trên máy tính hiện tại --';
+                    promptOpt.selected = true;
+                    sel.appendChild(promptOpt);
+                }
+
+                discovered.forEach(pObj => {
+                    const opt = document.createElement('option');
+                    opt.value = pObj.name;
+                    opt.textContent = '🖨️ ' + pObj.name + (pObj.default ? ' (Mặc định máy trạm)' : '');
+                    if (selectedPrinter && pObj.name === selectedPrinter) {
+                        opt.selected = true;
+                    }
+                    sel.appendChild(opt);
+                });
+
+                // Tùy chọn In Qua Trình Duyệt luôn có sẵn
+                const browserOpt = document.createElement('option');
+                browserOpt.value = 'Browser Print';
+                browserOpt.textContent = '🌐 In Qua Trình Duyệt (Thủ công)';
+                if (selectedPrinter === 'Browser Print') browserOpt.selected = true;
+                sel.appendChild(browserOpt);
+            }
+        });
+
+        syncPrinterSelectUI(selectedPrinter);
+
+        // Auto-sync label size if the active client printer specifies a label size
+        if (selectedPrinter && selectedPrinter !== 'Browser Print') {
+            const matchedSize = detectLabelSizeFromPrinterName(selectedPrinter);
+            if (matchedSize && matchedSize !== activeLabelSize) {
+                onLabelSizeChange(matchedSize, false, false);
+            }
         }
-    });
 
-    syncPrinterSelectUI(selectedPrinter);
-
-    // Auto-sync label size if the active client printer specifies a label size
-    if (selectedPrinter) {
-        const matchedSize = detectLabelSizeFromPrinterName(selectedPrinter);
-        if (matchedSize && matchedSize !== activeLabelSize) {
-            onLabelSizeChange(matchedSize, false, false);
+        if (isFallback) {
+            // Không hiển thị lỗi đỏ kỹ thuật; thông báo thân thiện đã được hiển thị trên panel
+            setPrinterStatusMessage('', 'info');
+        } else if (savedPrinterMissing) {
+            setPrinterStatusMessage(`⚠️ Máy in mặc định đã lưu ("${savedPrinter}") không còn tồn tại trên máy tính hiện tại. Vui lòng chọn lại máy in!`, 'warning');
+        } else if (showUserFeedback) {
+            setPrinterStatusMessage(`✓ Đã tìm thấy ${discovered.length} máy in trên máy tính hiện tại!`, 'success');
+        } else {
+            setPrinterStatusMessage('', 'info');
         }
-    }
-
-    if (discovered.length === 0) {
-        setPrinterStatusMessage(NO_PRINTER_MESSAGE, 'danger');
-    } else if (savedPrinterMissing) {
-        setPrinterStatusMessage(`⚠️ Máy in mặc định đã lưu ("${savedPrinter}") không còn tồn tại trên máy tính hiện tại. Vui lòng chọn lại máy in!`, 'warning');
-    } else if (showUserFeedback) {
-        setPrinterStatusMessage(`✓ Đã tìm thấy ${discovered.length} máy in trên máy tính hiện tại!`, 'success');
-    } else {
-        setPrinterStatusMessage('', 'info');
+    } finally {
+        isProbingPrinters = false;
     }
 }
+
+// Kích hoạt thủ công chế độ In Qua Trình Duyệt
+function activateBrowserPrintFallback(showToast = false) {
+    onDefaultPrinterChange('Browser Print', false);
+    syncPrinterSelectUI('Browser Print');
+    setPrinterStatusMessage('', 'info');
+    if (showToast) {
+        showDirectPrintToast('Đã chuyển sang chế độ In Qua Trình Duyệt. Bạn có thể in tem bình thường.', true);
+    }
+}
+
+// Mở modal hướng dẫn cài đặt dịch vụ in
+function openPrinterSetupGuideModal() {
+    const feedback = document.getElementById('setup_guide_probe_feedback');
+    if (feedback) feedback.innerHTML = '';
+    openModal('modal_printer_setup_guide');
+}
+
+// Kiểm tra lại dịch vụ in từ bên trong modal hướng dẫn
+async function testLocalhostPrintServiceFromGuide() {
+    const feedback = document.getElementById('setup_guide_probe_feedback');
+    const btn = document.getElementById('btn_probe_local_agent');
+    if (btn) btn.disabled = true;
+    if (feedback) {
+        feedback.style.color = '#2563eb';
+        feedback.innerText = '⏳ Đang quét kiểm tra lại dịch vụ máy in trên máy tính...';
+    }
+
+    try {
+        await refreshConnectedPrinters(false, true);
+        const physical = clientPrintersRegistry.filter(p => p.name && p.name !== 'Browser Print');
+        if (physical.length > 0) {
+            if (feedback) {
+                feedback.style.color = '#15803d';
+                feedback.innerHTML = `✓ Đã phát hiện ${physical.length} máy in cục bộ (${escapeHtml(physical.map(p => p.name).join(', '))})! Bạn có thể sử dụng In Trực Tiếp.`;
+            }
+        } else {
+            if (feedback) {
+                feedback.style.color = '#b45309';
+                feedback.innerHTML = '⚠️ Chưa phát hiện dịch vụ máy in cục bộ trên máy tính này. Bạn vẫn có thể sử dụng chức năng In Qua Trình Duyệt.';
+            }
+        }
+    } catch (e) {
+        if (feedback) {
+            feedback.style.color = '#b45309';
+            feedback.innerHTML = '⚠️ Không thể kết nối dịch vụ máy in cục bộ. Vui lòng sử dụng In Qua Trình Duyệt.';
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 
 // Khởi tạo đồng bộ máy in mặc định từ localStorage nếu khớp danh sách máy in đang kết nối
 
@@ -2893,10 +3082,14 @@ function validatePrePrintFrontend() {
 
     const printerSelect = document.getElementById('offcanvas_printer_select');
     const selectedPrinter = printerSelect ? printerSelect.value.trim() : '';
-    if (clientPrintersRegistry.length === 0) {
-        errors.push(NO_PRINTER_MESSAGE);
-    } else if (!selectedPrinter) {
-        errors.push('Vui lòng chọn máy in tem đang kết nối trên máy tính hiện tại.');
+    const isBrowserPrint = (selectedPrinter === 'Browser Print' || selectedPrinter === '');
+    if (!isBrowserPrint) {
+        const physical = clientPrintersRegistry.filter(p => p.name && p.name !== 'Browser Print');
+        if (physical.length === 0) {
+            errors.push('Không tìm thấy máy in trực tiếp "' + selectedPrinter + '" trên máy tính này. Vui lòng chuyển sang In Qua Trình Duyệt hoặc cài đặt phần mềm hỗ trợ in.');
+        } else if (!selectedPrinter) {
+            errors.push('Vui lòng chọn máy in tem đang kết nối trên máy tính hiện tại.');
+        }
     }
 
     const selectedSize = getActiveLabelSize();
@@ -2982,6 +3175,9 @@ function buildZplForClientZebra(labels, labelSize) {
 
 // Dispatch Direct Print strictly to the selected printer on the Client PC
 async function dispatchClientDirectPrint(labels, selectedPrinter, labelSize) {
+    if (!selectedPrinter || selectedPrinter === 'Browser Print') {
+        return { success: false, fallback_to_browser: true };
+    }
     const printerEntry = clientPrintersRegistry.find(p => p.name.toLowerCase() === String(selectedPrinter || '').toLowerCase());
 
     // 1. Zebra Browser Print on Client PC (127.0.0.1:9100/write)
@@ -3096,8 +3292,11 @@ function handlePrintJobSuccess(data, selectedPrinter) {
         return;
     }
 
-    // Chế độ In trực tiếp (mặc định): Tự động gửi lệnh in đến máy in đã chọn trên Client PC
-    if (data.direct_printed) {
+    // Chế độ In trực tiếp hoặc In qua trình duyệt
+    if (selectedPrinter === 'Browser Print' || selectedPrinter === '') {
+        // Fallback tự động: gọi in trình duyệt trên Standalone Print Zone tại Client PC
+        autoDispatchPrint();
+    } else if (data.direct_printed) {
         showDirectPrintToast(
             `Đã tự động in ${data.labels.length} tem (${getActiveLabelSize() === '110x80' ? '80×100 / 100×80mm Ngang' : '65×30mm Ngang'}) đến máy in "${selectedPrinter}".`,
             true
@@ -4023,7 +4222,13 @@ window.onDefaultPrinterChange     = onDefaultPrinterChange;
 window.onLabelSizeChange          = onLabelSizeChange;
 window.getActiveLabelSize         = getActiveLabelSize;
 window.savePrinterFromModal       = savePrinterFromModal;
-window.refreshConnectedPrinters   = refreshConnectedPrinters;
+window.refreshConnectedPrinters       = refreshConnectedPrinters;
+window.activateBrowserPrintFallback   = activateBrowserPrintFallback;
+window.openPrinterSetupGuideModal     = openPrinterSetupGuideModal;
+window.testLocalhostPrintServiceFromGuide = testLocalhostPrintServiceFromGuide;
+window.activateBrowserPrintFallback   = activateBrowserPrintFallback;
+window.openPrinterSetupGuideModal     = openPrinterSetupGuideModal;
+window.testLocalhostPrintServiceFromGuide = testLocalhostPrintServiceFromGuide;
 window.executeBatchPauseSelected  = executeBatchPauseSelected;
 window.executeBatchPauseFiltered  = executeBatchPauseFiltered;
 

@@ -47,13 +47,12 @@ ensurePrintHistorySchema($pdo);
 $printerDestination = trim($_POST['printer_name'] ?? $_POST['printer_destination'] ?? '');
 if (empty($printerDestination)) {
     $printerDestination = getDefaultPrinter($pdo);
-} else {
+} elseif (strcasecmp($printerDestination, 'Browser Print') !== 0) {
     saveDefaultPrinter($printerDestination, $pdo);
 }
 
 if (empty($printerDestination)) {
-    echo json_encode(['success' => false, 'message' => 'Lỗi cấu hình in: Vui lòng chọn máy in trước khi thực hiện in tem!']);
-    exit;
+    $printerDestination = 'Browser Print';
 }
 
 $labelSize = strtolower(trim($_POST['label_size'] ?? ''));
