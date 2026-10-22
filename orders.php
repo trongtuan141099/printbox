@@ -2336,16 +2336,23 @@ function savePrinterFromModal() {
 }
 
 // 1. Probe Zebra Browser Print on Client PC (127.0.0.1:9100 / 9101)
-async function probeZebraBrowserPrintClient() {
+async function probeZebraBrowserPrintClient(forceRefresh = false) {
+    if (!forceRefresh && sessionStorage.getItem('zebra_bp_unavailable') === 'true') {
+        return [];
+    }
     const isHttps = (window.location.protocol === 'https:');
     const endpoint = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
     try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 600);
+        const timer = setTimeout(() => ctrl.abort(), 400);
         const res = await fetch(endpoint, { method: 'GET', mode: 'cors', signal: ctrl.signal });
         clearTimeout(timer);
-        if (!res.ok) return [];
+        if (!res.ok) {
+            sessionStorage.setItem('zebra_bp_unavailable', 'true');
+            return [];
+        }
         const data = await res.json();
+        sessionStorage.removeItem('zebra_bp_unavailable');
         const list = [];
         if (data && Array.isArray(data.printer)) {
             data.printer.forEach(p => {
@@ -2358,6 +2365,7 @@ async function probeZebraBrowserPrintClient() {
         }
         return list;
     } catch (e) {
+        sessionStorage.setItem('zebra_bp_unavailable', 'true');
         return [];
     }
 }
@@ -2432,7 +2440,7 @@ async function discoverClientPrinters(forceRefresh = false) {
 
     // Luôn ưu tiên quét các dịch vụ và thiết bị trực tiếp trên Client PC
     const probeTasks = [
-        probeZebraBrowserPrintClient().then(res => { zebraList = res; addPrinters(res, 'zebra'); }).catch(() => {}),
+        probeZebraBrowserPrintClient(forceRefresh).then(res => { zebraList = res; addPrinters(res, 'zebra'); }).catch(() => {}),
         probeQzTrayClient().then(res => { qzList = res; addPrinters(res, 'qz'); }).catch(() => {}),
         probeWebUsbPrintersClient().then(res => { usbList = res; addPrinters(res, 'usb'); }).catch(() => {}),
         (async () => {
@@ -3375,35 +3383,8 @@ async function dispatchClientDirectPrint(labels, selectedPrinter, labelSize) {
         } catch (e) {}
     }
 
-    // 3. Client Local Print Service (127.0.0.1 / localhost)
-    const pathname = window.location.pathname || '/printbox/orders.php';
-    const localPrintUrls = [
-        'http://127.0.0.1' + pathname + '?action=client_direct_print',
-        'http://localhost' + pathname + '?action=client_direct_print'
-    ];
-    for (const url of localPrintUrls) {
-        try {
-            const fd = new FormData();
-            fd.append('action', 'client_direct_print');
-            fd.append('printer_name', selectedPrinter);
-            fd.append('label_size', labelSize);
-            fd.append('labels_json', JSON.stringify(labels));
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 12000);
-            const res = await fetch(url, { method: 'POST', mode: 'cors', body: fd, signal: ctrl.signal });
-            clearTimeout(timer);
-            if (res.ok) {
-                const data = await res.json();
-                if (data && data.success && data.direct_printed) {
-                    return {
-                        success: true,
-                        message: data.message || `Đã gửi trực tiếp ${labels.length} tem đến máy in "${selectedPrinter}" trên máy tính hiện tại.`
-                    };
-                }
-            }
-        } catch (e) {}
-    }
-
+    // Client PC is an independent workstation without XAMPP/PHP web server;
+    // Direct print is strictly handled via local print bridge (Zebra / QZ Tray / Kiosk mode).
     return { success: false };
 }
 

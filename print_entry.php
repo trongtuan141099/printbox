@@ -825,23 +825,31 @@ async function discoverEntryClientPrinters() {
     const isHttps = (window.location.protocol === 'https:');
     const zebraUrl = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
 
-    // 1. Probe Zebra Browser Print on client
+    // 1. Probe Zebra Browser Print on client (Silent cache to prevent net::ERR_CONNECTION_REFUSED)
     const tasks = [
         (async () => {
+            if (sessionStorage.getItem('zebra_bp_unavailable') === 'true') {
+                return;
+            }
             try {
                 const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), 600);
+                const timer = setTimeout(() => ctrl.abort(), 400);
                 const res = await fetch(zebraUrl, { method: 'GET', mode: 'cors', signal: ctrl.signal });
                 clearTimeout(timer);
                 if (res.ok) {
+                    sessionStorage.removeItem('zebra_bp_unavailable');
                     const data = await res.json();
                     if (data && Array.isArray(data.printer)) {
                         addList(data.printer.map(p => ({ name: p.name, default: false, source: 'zebra_browser_print', device: p })));
                     } else if (data && data.device && data.device.name) {
                         addList([{ name: data.device.name, default: true, source: 'zebra_browser_print', device: data.device }]);
                     }
+                } else {
+                    sessionStorage.setItem('zebra_bp_unavailable', 'true');
                 }
-            } catch (e) {}
+            } catch (e) {
+                sessionStorage.setItem('zebra_bp_unavailable', 'true');
+            }
         })(),
         (async () => {
             if (typeof window.qz !== 'undefined' && window.qz && window.qz.websocket) {
