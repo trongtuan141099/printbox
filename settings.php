@@ -538,119 +538,86 @@ function onSettingsPrinterFormSubmit() {
     return true;
 }
 
-async function discoverSettingsClientPrinters() {
-    const merged = new Map();
-    const addList = (arr) => {
-        if (!Array.isArray(arr)) return;
-        arr.forEach(item => {
-            if (!item || !item.name) return;
-            const n = String(item.name).trim();
-            if (!n || isSettingsVirtualPrinter(n) || n === 'Browser Print') return;
-            const k = n.toLowerCase();
-            if (!merged.has(k)) {
-                merged.set(k, item);
-            } else {
-                const existing = merged.get(k);
-                if (item.default) existing.default = true;
-                if (item.is_thermal) existing.is_thermal = true;
-                if (item.is_network) existing.is_network = true;
-                if (item.source && !existing.source) existing.source = item.source;
-            }
-        });
-    };
-
+async function probeSettingsZebraBrowserPrintClient(forceRefresh = false) {
     const isHttps = (window.location.protocol === 'https:');
-    const zebraUrl = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
+    const port = isHttps ? '9101' : '9100';
+    const proto = isHttps ? 'https:' : 'http:';
+    const hosts = ['127.0.0.1', 'localhost'];
 
-    // 1. Quét các dịch vụ cục bộ trên client (Silent cache to prevent net::ERR_CONNECTION_REFUSED)
-    const tasks = [
-        (async () => {
-            if (sessionStorage.getItem('zebra_bp_unavailable') === 'true') {
-                return;
-            }
-            try {
-                const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), 400);
-                const res = await fetch(zebraUrl, { method: 'GET', mode: 'cors', signal: ctrl.signal });
-                clearTimeout(timer);
-                if (res.ok) {
-                    sessionStorage.removeItem('zebra_bp_unavailable');
-                    const data = await res.json();
-                    if (data && Array.isArray(data.printer)) {
-                        addList(data.printer.map(p => ({ name: p.name, default: false, source: 'zebra_browser_print', device: p })));
-                    } else if (data && data.device && data.device.name) {
-                        addList([{ name: data.device.name, default: true, source: 'zebra_browser_print', device: data.device }]);
-                    }
+    for (const host of hosts) {
+        const baseUrl = `${proto}//${host}:${port}`;
+        try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 1800);
+            const res = await fetch(`${baseUrl}/available`, { method: 'GET', mode: 'cors', signal: ctrl.signal });
+            clearTimeout(timer);
+            if (!res.ok) continue;
+
+            const data = await res.json();
+            const list = [];
+            const addPrinter = (p, isDef = false) => {
+                if (!p) return;
+                const name = typeof p === 'string' ? p.trim() : String(p.name || '').trim();
+                if (!name || isSettingsVirtualPrinter(name)) return;
+                const isZebra = /zdesigner|zebra|zd|zt|gk|gx|gc|gt/i.test(name) ||
+                                (p.manufacturer && /zebra/i.test(p.manufacturer)) ||
+                                (p.deviceType === 'printer' || p.connection === 'driver');
+                if (isZebra) {
+                    list.push({
+                        name: name,
+                        default: isDef || Boolean(p.default),
+                        source: 'zebra_browser_print',
+                        device: typeof p === 'object' ? p : { name: name, uid: name, connection: 'driver', deviceType: 'printer', version: 4 },
+                        uid: (p && p.uid) ? p.uid : name,
+                        is_thermal: true
+                    });
+                }
+            };
+
+            if (data && Array.isArray(data.printer)) {
+                data.printer.forEach(p => addPrinter(p, false));
+            } else if (Array.isArray(data)) {
+                data.forEach(p => addPrinter(p, false));
+            } else if (data && data.device) {
+                if (Array.isArray(data.device)) {
+                    data.device.forEach(p => addPrinter(p, false));
                 } else {
-                    sessionStorage.setItem('zebra_bp_unavailable', 'true');
+                    addPrinter(data.device, true);
                 }
-            } catch (e) {
-                sessionStorage.setItem('zebra_bp_unavailable', 'true');
             }
-        })(),
-        (async () => {
-            if (typeof window.qz !== 'undefined' && window.qz && window.qz.websocket) {
-                try {
-                    if (!window.qz.websocket.isActive()) {
-                        await window.qz.websocket.connect({ retries: 0, delay: 0 });
-                    }
-                    const found = await window.qz.printers.find();
-                    if (Array.isArray(found)) {
-                        addList(found.map(n => ({ name: String(n || '').trim(), default: false, source: 'qz_tray' })));
-                    }
-                } catch (e) {}
-            }
-        })(),
-        (async () => {
-            if (typeof navigator !== 'undefined' && navigator.usb && typeof navigator.usb.getDevices === 'function') {
-                try {
-                    const devices = await navigator.usb.getDevices();
-                    if (Array.isArray(devices)) {
-                        devices.forEach(d => {
-                            if (d && (d.productName || d.manufacturerName)) {
-                                addList([{
-                                    name: ((d.manufacturerName ? d.manufacturerName + ' ' : '') + (d.productName || 'USB Printer')).trim(),
-                                    default: false,
-                                    source: 'webusb',
-                                    device: d
-                                }]);
-                            }
-                        });
-                    }
-                } catch (e) {}
-            }
-        })(),
-        (async () => {
-            addList(getSettingsCustomPrinters());
-        })()
-    ];
 
-    // CHỈ truy vấn Windows Spooler từ Server khi máy đang mở Web là Localhost
-    if (isSettingsPageOnLocalhost()) {
-        tasks.push((async () => {
-            try {
-                const fd = new FormData();
-                fd.append('action', 'refresh_printers');
-                const res = await fetch('orders.php', { method: 'POST', body: fd });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && data.success && Array.isArray(data.printers)) {
-                        addList(data.printers.map(p => ({
-                            name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
-                            default: Boolean(typeof p === 'object' && p !== null && p.default),
-                            is_thermal: Boolean(typeof p === 'object' && p !== null && p.is_thermal),
-                            is_network: Boolean(typeof p === 'object' && p !== null && p.is_network),
-                            port: (typeof p === 'object' && p !== null) ? (p.port || '') : '',
-                            source: (typeof p === 'object' && p !== null && p.source) ? p.source : 'windows_spooler'
-                        })));
+            if (list.length > 0) {
+                try {
+                    const defCtrl = new AbortController();
+                    const defTimer = setTimeout(() => defCtrl.abort(), 800);
+                    const defRes = await fetch(`${baseUrl}/default?type=printer`, { method: 'GET', mode: 'cors', signal: defCtrl.signal });
+                    clearTimeout(defTimer);
+                    if (defRes.ok) {
+                        const defData = await defRes.json();
+                        const defName = defData && (defData.name || (defData.device && defData.device.name));
+                        if (defName) {
+                            const found = list.find(item => item.name.toLowerCase() === String(defName).trim().toLowerCase());
+                            if (found) found.default = true;
+                        }
                     }
-                }
-            } catch (e) {}
-        })());
+                } catch (e) {}
+                return list;
+            }
+        } catch (e) {}
+    }
+    return [];
+}
+
+async function discoverSettingsClientPrinters() {
+    // ƯU TIÊN 1: ZEBRA BROWSER PRINT LÀ CƠ CHẾ CHÍNH (PRIMARY)
+    const zebraList = await probeSettingsZebraBrowserPrintClient();
+    if (Array.isArray(zebraList) && zebraList.length > 0) {
+        // Tự động lấy danh sách từ Browser Print. Không lấy máy in từ Server, Không lấy từ Database.
+        return zebraList;
     }
 
-    await Promise.allSettled(tasks);
-    return Array.from(merged.values());
+    // ƯU TIÊN 2: NẾU BROWSER PRINT KHÔNG HOẠT ĐỘNG -> FALLBACK IN QUA TRÌNH DUYỆT
+    return [];
 }
 
 async function refreshSettingsClientPrinters(showFeedback = false, forceRefresh = false, retryCount = 0) {

@@ -372,7 +372,10 @@ try {
     // Tự động gửi lệnh in trực tiếp tới máy in đã chọn nếu ở chế độ In trực tiếp (direct)
     $directPrintRes = ['success' => false, 'message' => '', 'pages_printed' => 0];
     if ($printMode !== 'preview') {
-        $directPrintRes = dispatchWindowsDirectPrint($labels, $printerDestination, $labelSize);
+        // Only trigger Windows Spooler on local server machine; remote clients use Zebra Browser Print
+        if (isClientLocalMachine() && strcasecmp($printerDestination, 'Browser Print') !== 0) {
+            $directPrintRes = dispatchWindowsDirectPrint($labels, $printerDestination, $labelSize);
+        }
     }
 
     // Ghi log kiểm toán in tem chi tiết ra file logs/print_audit.log
