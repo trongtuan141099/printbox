@@ -729,6 +729,12 @@ function getConnectedPrinters($forceRefresh = false) {
         @session_start();
     }
 
+    // STRICT ISOLATION: Server printers MUST NEVER be exposed to remote Client PCs.
+    // If request originates from a remote client over LAN/WAN, immediately return empty list.
+    if (!isClientLocalMachine()) {
+        return [];
+    }
+
     $remoteIp  = trim((string)($_SERVER['REMOTE_ADDR'] ?? ''));
     $cacheKey  = 'client_printers_cache_v2';
     $cacheTs   = $cacheKey . '_ts';
@@ -894,6 +900,11 @@ function getConnectedPrinters($forceRefresh = false) {
 function getDefaultPrinter(PDO $pdo = null, $forceRefresh = false) {
     if (session_status() === PHP_SESSION_NONE) {
         @session_start();
+    }
+
+    // Remote client PCs manage default printer strictly via client-side storage (localStorage)
+    if (!isClientLocalMachine()) {
+        return "";
     }
     if ($pdo === null) {
         $pdo = getDbConnection();

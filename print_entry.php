@@ -131,7 +131,14 @@ $prefillSlip = trim($_GET['slip'] ?? '');
                 <div class="form-group">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                         <label class="form-label fw-bold" style="margin-bottom:0;">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
-                        <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="refreshEntryClientPrinters(true)">🔄 Làm mới máy in</button>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="promptAddEntryCustomPrinter()" title="Khai báo thêm máy in đã cài đặt trên máy tính này">
+                                ➕ Thêm máy in
+                            </button>
+                            <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none" onclick="refreshEntryClientPrinters(true, true)" title="Quét lại máy in thực tế từ máy tính hiện tại">
+                                🔄 Làm mới
+                            </button>
+                        </div>
                     </div>
                     <select id="input_printer_select" class="form-select border-primary fw-bold" onchange="onEntryPrinterChange(this.value)">
                         <option value="">⏳ Đang tải danh sách máy in trên máy tính hiện tại...</option>
@@ -531,15 +538,66 @@ function isEntryVirtualPrinter(name) {
     return ['microsoft print to pdf', 'microsoft xps document writer', 'onenote', 'send to onenote', 'fax', 'adobe pdf', 'foxit reader pdf printer', 'pdfcreator', 'cutepdf'].some(p => n.includes(p));
 }
 
+function isEntryPageOnLocalhost() {
+    const h = window.location.hostname || '';
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
 function getEntrySavedDefaultPrinter() {
     try {
+        // 1. Ưu tiên máy in lưu theo User trên máy tính hiện tại
         const uVal = localStorage.getItem('printbox_default_printer_u_' + currentEntryUserId);
         if (uVal && !isEntryVirtualPrinter(uVal)) return uVal;
-        if (serverEntryUserDefaultPrinter && !isEntryVirtualPrinter(serverEntryUserDefaultPrinter)) return serverEntryUserDefaultPrinter;
+        // 2. Tiếp theo là máy in lưu theo thiết bị (Browser) trên máy tính này
         const bVal = localStorage.getItem('printbox_client_default_printer');
         if (bVal && !isEntryVirtualPrinter(bVal)) return bVal;
+        const legacyVal = localStorage.getItem('printbox_default_printer');
+        if (legacyVal && !isEntryVirtualPrinter(legacyVal)) return legacyVal;
+        // 3. Chỉ lấy máy in mặc định server nếu đang ở chính máy server (localhost)
+        if (isEntryPageOnLocalhost() && serverEntryUserDefaultPrinter && !isEntryVirtualPrinter(serverEntryUserDefaultPrinter)) {
+            return serverEntryUserDefaultPrinter;
+        }
     } catch (e) {}
-    return serverEntryUserDefaultPrinter || '';
+    return '';
+}
+
+function getEntryCustomPrinters() {
+    try {
+        const raw = localStorage.getItem('printbox_client_custom_printers');
+        if (raw) {
+            const list = JSON.parse(raw);
+            if (Array.isArray(list)) {
+                return list
+                    .map(item => (typeof item === 'string') ? { name: item, default: false, source: 'client_custom' } : item)
+                    .filter(p => p && p.name && !isEntryVirtualPrinter(p.name));
+            }
+        }
+    } catch (e) {}
+    return [];
+}
+
+function saveEntryCustomPrinters(list) {
+    try {
+        localStorage.setItem('printbox_client_custom_printers', JSON.stringify(list));
+    } catch (e) {}
+}
+
+function promptAddEntryCustomPrinter() {
+    const printerName = prompt('Nhập tên máy in đã cài đặt trên máy tính này (Ví dụ: Zebra ZD421, Godex G500, XPrinter XP-350B, Brother QL-820NWB):');
+    if (!printerName || !printerName.trim()) return;
+    const cleanName = printerName.trim();
+    if (isEntryVirtualPrinter(cleanName)) {
+        alert('Vui lòng nhập tên máy in tem vật lý, không nhập tên máy in ảo (PDF, XPS...).');
+        return;
+    }
+    const current = getEntryCustomPrinters();
+    const existingIndex = current.findIndex(p => p.name.toLowerCase() === cleanName.toLowerCase());
+    if (existingIndex < 0) {
+        current.push({ name: cleanName, default: true, source: 'client_custom' });
+        saveEntryCustomPrinters(current);
+    }
+    onEntryPrinterChange(cleanName);
+    refreshEntryClientPrinters(true, true);
 }
 
 function setEntryPrinterMsg(msg, color = '#b91c1c') {
@@ -582,54 +640,107 @@ async function discoverEntryClientPrinters() {
         arr.forEach(item => {
             if (!item || !item.name) return;
             const n = String(item.name).trim();
-            if (!n || isEntryVirtualPrinter(n)) return;
+            if (!n || isEntryVirtualPrinter(n) || n === 'Browser Print') return;
             const k = n.toLowerCase();
-            if (!merged.has(k)) merged.set(k, item);
+            if (!merged.has(k)) {
+                merged.set(k, item);
+            } else {
+                const existing = merged.get(k);
+                if (item.default) existing.default = true;
+                if (item.is_thermal) existing.is_thermal = true;
+                if (item.is_network) existing.is_network = true;
+                if (item.source && !existing.source) existing.source = item.source;
+            }
         });
     };
 
-    // Probe Zebra Browser Print & Windows Spooler on system
     const isHttps = (window.location.protocol === 'https:');
     const zebraUrl = isHttps ? 'https://127.0.0.1:9101/available' : 'http://127.0.0.1:9100/available';
 
-    // 1. Probe Zebra Browser Print if active on client
-    try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 600);
-        const res = await fetch(zebraUrl, { method: 'GET', mode: 'cors', signal: ctrl.signal });
-        clearTimeout(timer);
-        if (res.ok) {
-            const data = await res.json();
-            if (data && Array.isArray(data.printer)) {
-                addList(data.printer.map(p => ({ name: p.name, default: false, source: 'zebra_browser_print', device: p })));
+    // 1. Probe Zebra Browser Print on client
+    const tasks = [
+        (async () => {
+            try {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), 600);
+                const res = await fetch(zebraUrl, { method: 'GET', mode: 'cors', signal: ctrl.signal });
+                clearTimeout(timer);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && Array.isArray(data.printer)) {
+                        addList(data.printer.map(p => ({ name: p.name, default: false, source: 'zebra_browser_print', device: p })));
+                    } else if (data && data.device && data.device.name) {
+                        addList([{ name: data.device.name, default: true, source: 'zebra_browser_print', device: data.device }]);
+                    }
+                }
+            } catch (e) {}
+        })(),
+        (async () => {
+            if (typeof window.qz !== 'undefined' && window.qz && window.qz.websocket) {
+                try {
+                    if (!window.qz.websocket.isActive()) {
+                        await window.qz.websocket.connect({ retries: 0, delay: 0 });
+                    }
+                    const found = await window.qz.printers.find();
+                    if (Array.isArray(found)) {
+                        addList(found.map(n => ({ name: String(n || '').trim(), default: false, source: 'qz_tray' })));
+                    }
+                } catch (e) {}
             }
-        }
-    } catch (e) {}
-
-    // 2. Always fetch Windows Spooler printers (Local, Network, Shared) via server
-    try {
-        const fd = new FormData();
-        fd.append('action', 'refresh_printers');
-        const res = await fetch('orders.php', { method: 'POST', body: fd });
-        if (res.ok) {
-            const data = await res.json();
-            if (data && data.success && Array.isArray(data.printers)) {
-                addList(data.printers.map(p => ({
-                    name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
-                    default: Boolean(typeof p === 'object' && p !== null && p.default),
-                    is_thermal: Boolean(typeof p === 'object' && p !== null && p.is_thermal),
-                    is_network: Boolean(typeof p === 'object' && p !== null && p.is_network),
-                    port: (typeof p === 'object' && p !== null) ? (p.port || '') : '',
-                    source: (typeof p === 'object' && p !== null && p.source) ? p.source : 'windows_spooler'
-                })));
+        })(),
+        (async () => {
+            if (typeof navigator !== 'undefined' && navigator.usb && typeof navigator.usb.getDevices === 'function') {
+                try {
+                    const devices = await navigator.usb.getDevices();
+                    if (Array.isArray(devices)) {
+                        devices.forEach(d => {
+                            if (d && (d.productName || d.manufacturerName)) {
+                                addList([{
+                                    name: ((d.manufacturerName ? d.manufacturerName + ' ' : '') + (d.productName || 'USB Printer')).trim(),
+                                    default: false,
+                                    source: 'webusb',
+                                    device: d
+                                }]);
+                            }
+                        });
+                    }
+                } catch (e) {}
             }
-        }
-    } catch (e) {}
+        })(),
+        (async () => {
+            addList(getEntryCustomPrinters());
+        })()
+    ];
 
+    // CHỈ truy vấn Windows Spooler từ Server khi máy đang mở Web là Localhost
+    if (isEntryPageOnLocalhost()) {
+        tasks.push((async () => {
+            try {
+                const fd = new FormData();
+                fd.append('action', 'refresh_printers');
+                const res = await fetch('orders.php', { method: 'POST', body: fd });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.success && Array.isArray(data.printers)) {
+                        addList(data.printers.map(p => ({
+                            name: (typeof p === 'object' && p !== null) ? (p.name || '') : String(p),
+                            default: Boolean(typeof p === 'object' && p !== null && p.default),
+                            is_thermal: Boolean(typeof p === 'object' && p !== null && p.is_thermal),
+                            is_network: Boolean(typeof p === 'object' && p !== null && p.is_network),
+                            port: (typeof p === 'object' && p !== null) ? (p.port || '') : '',
+                            source: (typeof p === 'object' && p !== null && p.source) ? p.source : 'windows_spooler'
+                        })));
+                    }
+                }
+            } catch (e) {}
+        })());
+    }
+
+    await Promise.allSettled(tasks);
     return Array.from(merged.values());
 }
 
-async function refreshEntryClientPrinters(showFeedback = false, retryCount = 0) {
+async function refreshEntryClientPrinters(showFeedback = false, forceRefresh = false, retryCount = 0) {
     if (showFeedback) {
         setEntryPrinterMsg('⏳ Đang quét các máy in trên máy tính hiện tại...', '#2563eb');
     }
@@ -644,14 +755,15 @@ async function refreshEntryClientPrinters(showFeedback = false, retryCount = 0) 
     let savedMissing = false;
 
     if (discovered.length > 0) {
-        if (saved) {
+        if (saved && saved !== 'Browser Print') {
             const found = discovered.find(p => p.name.toLowerCase() === saved.toLowerCase());
             if (found) {
                 selectedPrinter = found.name;
             } else {
                 savedMissing = true;
             }
-        } else {
+        }
+        if (!selectedPrinter && !savedMissing) {
             const defP = discovered.find(p => p.default) || discovered[0];
             if (defP) {
                 selectedPrinter = defP.name;
@@ -663,7 +775,7 @@ async function refreshEntryClientPrinters(showFeedback = false, retryCount = 0) 
     if (discovered.length === 0) {
         const opt = document.createElement('option');
         opt.value = 'Browser Print';
-        opt.textContent = '🖨️ In Qua Trình Duyệt (Mặc định)';
+        opt.textContent = '🌐 In Qua Trình Duyệt (Sử dụng máy in của máy tính này)';
         opt.selected = true;
         sel.appendChild(opt);
         setEntryPrinterMsg('Không phát hiện dịch vụ máy in cục bộ. Bạn vẫn có thể sử dụng In Qua Trình Duyệt.', '#2563eb');
@@ -680,10 +792,37 @@ async function refreshEntryClientPrinters(showFeedback = false, retryCount = 0) 
         discovered.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.name;
-            opt.textContent = '🖨️ ' + p.name + (p.default ? ' (Mặc định máy trạm)' : '');
-            if (selectedPrinter && p.name === selectedPrinter) opt.selected = true;
+            let connBadge = '';
+            if (p.source === 'zebra' || p.source === 'zebra_browser_print') {
+                connBadge = ' [Zebra Local]';
+            } else if (p.source === 'qz' || p.source === 'qz_tray') {
+                connBadge = ' [Windows/QZ Tray]';
+            } else if (p.source === 'webusb' || p.source === 'usb') {
+                connBadge = ' [USB Client]';
+            } else if (p.source === 'client_custom') {
+                connBadge = ' [Máy in cục bộ]';
+            } else if (p.is_network) {
+                connBadge = ` [Mạng LAN${p.port ? ': ' + p.port : ''}]`;
+            } else if (p.is_shared) {
+                connBadge = ' [Shared]';
+            } else {
+                connBadge = ' [Cục bộ]';
+            }
+
+            if (p.is_thermal) connBadge += ' (Tem)';
+            if (p.default)    connBadge += ' (Mặc định)';
+
+            opt.textContent = '🖨️ ' + p.name + connBadge;
+            if (selectedPrinter && p.name.toLowerCase() === selectedPrinter.toLowerCase()) opt.selected = true;
             sel.appendChild(opt);
         });
+
+        // Option In Qua Trình Duyệt
+        const browserOpt = document.createElement('option');
+        browserOpt.value = 'Browser Print';
+        browserOpt.textContent = '🌐 In Qua Trình Duyệt (Sử dụng máy in của máy tính này)';
+        if (selectedPrinter === 'Browser Print') browserOpt.selected = true;
+        sel.appendChild(browserOpt);
 
         if (savedMissing) {
             setEntryPrinterMsg(`⚠️ Máy in mặc định đã lưu ("${saved}") không còn tồn tại trên máy tính này. Vui lòng chọn lại máy in!`, '#b45309');
@@ -693,6 +832,24 @@ async function refreshEntryClientPrinters(showFeedback = false, retryCount = 0) 
             setEntryPrinterMsg('');
         }
     }
+
+    // BỔ SUNG LOG KIỂM TRA CHI TIẾT THEO YÊU CẦU
+    const comboboxOptionsList = Array.from(sel.options).map(o => ({
+        value: o.value,
+        text: o.textContent,
+        selected: o.selected
+    }));
+
+    console.group('[KIỂM TRA MÁY IN CLIENT / PRINTER INSPECTION (PRINT ENTRY)]');
+    console.log('1. Danh sách lấy từ Client:', discovered.map(p => ({
+        name: p.name,
+        source: p.source || 'client',
+        default: Boolean(p.default),
+        is_network: Boolean(p.is_network)
+    })));
+    console.log('2. Danh sách hiển thị combobox:', comboboxOptionsList);
+    console.log('3. Máy in mặc định đang chọn:', selectedPrinter || (savedMissing ? `(Máy in "${saved}" không còn kết nối - Yêu cầu chọn lại)` : '(Chưa chọn - vui lòng chọn)'));
+    console.groupEnd();
 }
 
 refreshEntryClientPrinters(false);
