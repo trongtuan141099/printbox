@@ -56,20 +56,27 @@ if (empty($printerDestination)) {
 }
 
 $labelSize = strtolower(trim($_POST['label_size'] ?? ''));
-if (in_array($labelSize, ['80x110', '100x80', '80x100'], true)) {
+if ($labelSize === '80x110') {
+    $labelSize = '80x110';
+} elseif (in_array($labelSize, ['110x80', '100x80', '80x100'], true)) {
     $labelSize = '110x80';
-}
-if (empty($labelSize)) {
+} elseif ($labelSize === '65x30') {
+    $labelSize = '65x30';
+} else {
     $labelSize = getDefaultLabelSize($pdo);
 }
-// Auto-match label size if printer name explicitly indicates 80x110 / 110x80 / 80x100 / 100x80
-if (preg_match('/(80\s*x\s*110|110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/i', $printerDestination)) {
+
+// Auto-match label size if printer name explicitly indicates size
+if (preg_match('/80\s*x\s*110/i', $printerDestination)) {
+    $labelSize = '80x110';
+} elseif (preg_match('/(110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/i', $printerDestination)) {
     $labelSize = '110x80';
 } elseif (preg_match('/65\s*x\s*30/i', $printerDestination)) {
     $labelSize = '65x30';
 }
-if (!in_array($labelSize, ['65x30', '110x80'], true)) {
-    echo json_encode(['success' => false, 'message' => 'Lỗi cấu hình in: Kích thước tem không hợp lệ (hỗ trợ 65x30mm hoặc 80x100mm / 100x80mm / 110x80mm)!']);
+
+if (!in_array($labelSize, ['65x30', '110x80', '80x110'], true)) {
+    echo json_encode(['success' => false, 'message' => 'Lỗi cấu hình in: Kích thước tem không hợp lệ (hỗ trợ 65x30mm, 110x80mm hoặc 80x110mm)!']);
     exit;
 }
 saveDefaultLabelSize($labelSize, $pdo);

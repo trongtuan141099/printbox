@@ -1213,6 +1213,110 @@ body.modal-open {
     color: #000000;
 }
 
+/* =======================================================
+   KÍCH THƯỚC TEM ĐỨNG (80 × 110 mm - PORTRAIT DỌC) - SCREEN PREVIEW
+   QR Code phía trên (48x48mm), thông tin chữ phía dưới rõ ràng
+   ======================================================= */
+.label-size-80x110 .box-label-item,
+.box-label-item.label-size-80x110 {
+    width: 80mm;
+    height: 110mm;
+    max-width: 80mm;
+    max-height: 110mm;
+    padding: 3mm;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2mm;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.label-size-80x110 .label-qr-col,
+.box-label-item.label-size-80x110 .label-qr-col {
+    width: 48mm;
+    height: 48mm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin: 0 auto;
+}
+
+.label-size-80x110 .label-qr-col img,
+.label-size-80x110 .label-qr-col svg,
+.box-label-item.label-size-80x110 .label-qr-col img,
+.box-label-item.label-size-80x110 .label-qr-col svg {
+    width: 48mm;
+    height: 48mm;
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+
+.label-size-80x110 .label-text-col,
+.box-label-item.label-size-80x110 .label-text-col {
+    width: 100%;
+    flex: 1;
+    min-height: 52mm;
+    max-height: 54mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+    line-height: 1.2;
+    text-align: left;
+}
+
+.label-size-80x110 .label-line-1,
+.box-label-item.label-size-80x110 .label-line-1 {
+    font-size: 13pt;
+    font-weight: 900;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #000000;
+}
+
+.label-size-80x110 .label-line-2,
+.box-label-item.label-size-80x110 .label-line-2 {
+    font-size: 12pt;
+    font-weight: 800;
+    color: #000000;
+}
+
+.label-size-80x110 .label-line-3,
+.box-label-item.label-size-80x110 .label-line-3 {
+    font-size: 11pt;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: #000000;
+}
+
+.label-size-80x110 .label-line-4,
+.box-label-item.label-size-80x110 .label-line-4 {
+    font-size: 11pt;
+    font-weight: 700;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #000000;
+}
+
+.label-size-80x110 .label-line-5,
+.box-label-item.label-size-80x110 .label-line-5 {
+    font-size: 13pt;
+    font-weight: 900;
+    letter-spacing: 0.5px;
+    border-top: 2px solid #000000;
+    padding-top: 1.5mm;
+    color: #000000;
+}
+
 /* Render off-screen on normal display so browser eagerly decodes QR images before window.print() */
 #print_standalone_zone {
     position: fixed !important;
@@ -1229,7 +1333,6 @@ body.modal-open {
 /* IN ẤN TRÌNH DUYỆT CÔNG NGHIỆP (@MEDIA PRINT) */
 @media print {
     @page {
-        size: 65mm 30mm;
         margin: 0mm !important;
     }
     
@@ -1503,6 +1606,116 @@ body.modal-open {
         white-space: nowrap !important;
         overflow: hidden !important;
         text-overflow: ellipsis !important;
+        color: #000000 !important;
+    }
+
+    /* =========================================================
+       KHỔ TEM ĐỨNG 80 × 110 MM (PORTRAIT DỌC) (@MEDIA PRINT)
+       ========================================================= */
+    #print_standalone_zone.label-size-80x110 {
+        width: 80mm !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .box-label-item {
+        width: 80mm !important;
+        max-width: 80mm !important;
+        height: 108.5mm !important;
+        max-height: 108.5mm !important;
+        margin: 0 !important;
+        padding: 2.5mm !important;
+        box-sizing: border-box !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        transform: none !important;
+        zoom: 1 !important;
+        page-break-before: avoid !important;
+        break-before: avoid !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        overflow: hidden !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .box-label-item:last-child {
+        page-break-after: avoid !important;
+        break-after: avoid !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .label-qr-col {
+        width: 48mm !important;
+        height: 48mm !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        flex-shrink: 0 !important;
+        margin: 0 auto !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .label-qr-col img,
+    #print_standalone_zone.label-size-80x110 .label-qr-col svg {
+        width: 48mm !important;
+        height: 48mm !important;
+        display: block !important;
+        image-rendering: pixelated !important;
+        image-rendering: crisp-edges !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .label-text-col {
+        width: 100% !important;
+        flex: 1 !important;
+        min-height: 52mm !important;
+        max-height: 54mm !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: space-between !important;
+        overflow: hidden !important;
+        color: #000000 !important;
+        line-height: 1.2 !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .label-line-1 {
+        font-size: 13pt !important;
+        font-weight: 900 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        color: #000000 !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .label-line-2 {
+        font-size: 12pt !important;
+        font-weight: 800 !important;
+        color: #000000 !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .label-line-3 {
+        font-size: 11pt !important;
+        font-weight: 900 !important;
+        letter-spacing: 2px !important;
+        color: #000000 !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .label-line-4 {
+        font-size: 11pt !important;
+        font-weight: 700 !important;
+        white-space: normal !important;
+        display: -webkit-box !important;
+        -webkit-line-clamp: 2 !important;
+        -webkit-box-orient: vertical !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        color: #000000 !important;
+    }
+
+    #print_standalone_zone.label-size-80x110 .label-line-5 {
+        font-size: 13pt !important;
+        font-weight: 900 !important;
+        letter-spacing: 0.5px !important;
+        border-top: 2px solid #000000 !important;
+        padding-top: 1.5mm !important;
         color: #000000 !important;
     }
 

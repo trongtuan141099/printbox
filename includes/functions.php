@@ -988,14 +988,17 @@ function saveDefaultPrinter($printerName, PDO $pdo = null) {
  */
 function normalizeLabelSize($size) {
     $size = strtolower(trim((string)$size));
-    if (in_array($size, ['110x80', '80x110', '100x80', '80x100'], true)) {
+    if ($size === '80x110') {
+        return '80x110';
+    }
+    if (in_array($size, ['110x80', '100x80', '80x100'], true)) {
         return '110x80';
     }
     return '65x30';
 }
 
 /**
- * Lấy khổ tem in mặc định ('65x30' hoặc '110x80')
+ * Lấy khổ tem in mặc định ('65x30', '110x80' hoặc '80x110')
  * @param PDO|null $pdo
  * @param bool $forceRefresh
  * @return string
@@ -1023,15 +1026,17 @@ function getDefaultLabelSize(PDO $pdo = null, $forceRefresh = false) {
     $w = (int)($settings['label_width_mm'] ?? 65);
     $h = (int)($settings['label_height_mm'] ?? 30);
 
-    if (($w >= 80 && $h >= 75) || ($w === 110 && $h === 80) || ($w === 80 && $h === 110) || ($w === 100 && $h === 80) || ($w === 80 && $h === 100)) {
+    if ($w === 80 && $h === 110) {
+        return '80x110';
+    }
+    if (($w >= 80 && $h >= 75) || ($w === 110 && $h === 80) || ($w === 100 && $h === 80) || ($w === 80 && $h === 100)) {
         return '110x80';
     }
     return '65x30';
 }
 
 /**
- * Lưu khổ tem in mặc định ('65x30' hoặc '110x80') vào session và CSDL
- * Chuẩn tem lớn (80x100 / 100x80 / 110x80): Hướng ngang (LANDSCAPE)
+ * Lưu khổ tem in mặc định ('65x30', '110x80' hoặc '80x110') vào session và CSDL
  * @param string $size
  * @param PDO|null $pdo
  * @return bool
@@ -1047,9 +1052,16 @@ function saveDefaultLabelSize($size, PDO $pdo = null) {
     }
 
     $_SESSION['default_label_size'] = $size;
-    // Store Landscape dimensions (Width x Height in mm)
-    $w = ($size === '110x80') ? 100 : 65;
-    $h = ($size === '110x80') ? 80 : 30;
+    if ($size === '80x110') {
+        $w = 80;
+        $h = 110;
+    } elseif ($size === '110x80') {
+        $w = 110;
+        $h = 80;
+    } else {
+        $w = 65;
+        $h = 30;
+    }
 
     updateSystemSetting('label_width_mm', (string)$w, $pdo);
     updateSystemSetting('label_height_mm', (string)$h, $pdo);
@@ -1124,8 +1136,10 @@ function dispatchWindowsDirectPrint(array $labels, $printerName, $labelSize = '6
     $printerName = trim((string)$printerName);
     $labelSize   = normalizeLabelSize($labelSize);
 
-    // Auto-detect large label printer if printer name explicitly indicates 80x110 / 110x80 / 80x100 / 100x80
-    if (preg_match('/(80\s*x\s*110|110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/i', $printerName)) {
+    // Auto-detect label size if printer name explicitly indicates size
+    if (preg_match('/80\s*x\s*110/i', $printerName)) {
+        $labelSize = '80x110';
+    } elseif (preg_match('/(110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/i', $printerName)) {
         $labelSize = '110x80';
     } elseif (preg_match('/65\s*x\s*30/i', $printerName)) {
         $labelSize = '65x30';

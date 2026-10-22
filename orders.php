@@ -1298,8 +1298,9 @@ $exportParams = http_build_query([
             <div class="mb-3">
                 <label class="form-label fw-bold mb-1">📐 Kích Thước Tem In:</label>
                 <select id="offcanvas_label_size_select" class="form-select border-primary fw-bold" onchange="onLabelSizeChange(this.value)">
-                    <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang) - Mặc định xưởng</option>
-                    <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (80 × 100 / 100 × 80 / 110 × 80 mm - Ngang)</option>
+                    <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang)</option>
+                    <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (110 × 80 mm - Ngang)</option>
+                    <option value="80x110" <?= ($defaultLabelSize === '80x110') ? 'selected' : '' ?>>Tem đứng (80 × 110 mm - Dọc)</option>
                 </select>
 
             </div>
@@ -1494,7 +1495,8 @@ $exportParams = http_build_query([
                         <strong>Khổ tem:</strong>
                         <select id="preview_label_size_select" class="form-select form-select-sm border-primary fw-bold py-0" style="width: auto;" onchange="onLabelSizeChange(this.value, true)">
                             <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang)</option>
-                            <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (80 × 100 / 100 × 80 mm - Ngang)</option>
+                            <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (110 × 80 mm - Ngang)</option>
+                            <option value="80x110" <?= ($defaultLabelSize === '80x110') ? 'selected' : '' ?>>Tem đứng (80 × 110 mm - Dọc)</option>
                         </select>
                     </div>
                 </div>
@@ -1855,8 +1857,9 @@ $exportParams = http_build_query([
             <div class="mb-3">
                 <label class="form-label fw-bold mb-1">📐 Khổ Tem In Mặc Định:</label>
                 <select id="modal_label_size_select" class="form-select form-select-lg fw-bold border-primary">
-                    <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang) - Mặc định chuẩn</option>
-                    <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (80 × 100 / 100 × 80 / 110 × 80 mm - Ngang)</option>
+                    <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang)</option>
+                    <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (110 × 80 mm - Ngang)</option>
+                    <option value="80x110" <?= ($defaultLabelSize === '80x110') ? 'selected' : '' ?>>Tem đứng (80 × 110 mm - Dọc)</option>
                 </select>
                 <small class="text-muted d-block mt-1">Cấu hình khổ giấy mặc định khi sinh tem và gửi lệnh in.</small>
             </div>
@@ -2278,7 +2281,10 @@ function syncPrinterSelectUI(printerName) {
 
 function detectLabelSizeFromPrinterName(printerName) {
     const name = String(printerName || '').toLowerCase();
-    if (/(80\s*x\s*110|110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/.test(name)) {
+    if (/80\s*x\s*110/.test(name)) {
+        return '80x110';
+    }
+    if (/(110\s*x\s*80|80\s*x\s*100|100\s*x\s*80)/.test(name)) {
         return '110x80';
     }
     if (/65\s*x\s*30/.test(name)) {
@@ -2510,27 +2516,8 @@ async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh =
                 discovered.forEach(pObj => {
                     const opt = document.createElement('option');
                     opt.value = pObj.name;
-                    let connBadge = '';
-                    if (pObj.source === 'zebra' || pObj.source === 'zebra_browser_print') {
-                        connBadge = ' [Zebra Local]';
-                    } else if (pObj.source === 'qz' || pObj.source === 'qz_tray') {
-                        connBadge = ' [Windows/QZ Tray]';
-                    } else if (pObj.source === 'webusb' || pObj.source === 'usb') {
-                        connBadge = ' [USB Client]';
-                    } else if (pObj.source === 'client_custom') {
-                        connBadge = ' [Máy in cục bộ]';
-                    } else if (pObj.is_network) {
-                        connBadge = ` [Mạng LAN${pObj.port ? ': ' + pObj.port : ''}]`;
-                    } else if (pObj.is_shared) {
-                        connBadge = ' [Shared]';
-                    } else {
-                        connBadge = ' [Cục bộ]';
-                    }
-
-                    if (pObj.is_thermal) connBadge += ' (Tem)';
-                    if (pObj.default)    connBadge += ' (Mặc định)';
-
-                    opt.textContent = '🖨️ ' + pObj.name + connBadge;
+                    // Tên hiển thị khớp 100% với Windows Settings -> Bluetooth & Devices -> Printers & Scanners
+                    opt.textContent = pObj.name;
                     if (selectedPrinter && pObj.name.toLowerCase() === selectedPrinter.toLowerCase()) {
                         opt.selected = true;
                     }
@@ -2540,7 +2527,7 @@ async function refreshConnectedPrinters(showUserFeedback = false, forceRefresh =
                 // Luôn có tùy chọn In Qua Trình Duyệt ở cuối
                 const browserOpt = document.createElement('option');
                 browserOpt.value = 'Browser Print';
-                browserOpt.textContent = '🌐 In Qua Trình Duyệt (Sử dụng máy in của máy tính này)';
+                browserOpt.textContent = 'Browser Print (In Qua Trình Duyệt)';
                 if (selectedPrinter === 'Browser Print') browserOpt.selected = true;
                 sel.appendChild(browserOpt);
             }
@@ -2650,7 +2637,10 @@ let activeLabelSize = '<?= $defaultLabelSize ?>';
 
 function normalizeSizeCode(size) {
     const s = String(size || '').trim().toLowerCase();
-    if (s === '110x80' || s === '80x110' || s === '100x80' || s === '80x100') {
+    if (s === '80x110') {
+        return '80x110';
+    }
+    if (s === '110x80' || s === '100x80' || s === '80x100') {
         return '110x80';
     }
     return '65x30';
@@ -2680,15 +2670,15 @@ function applyDynamicPrintPageStyle(size) {
         styleEl.id = 'dynamic_print_page_style';
         document.head.appendChild(styleEl);
     }
-    if (size === '110x80') {
+    if (size === '80x110') {
         styleEl.textContent = `
             @page {
-                size: 104mm 80mm !important;
+                size: 80mm 110mm !important;
                 margin: 0mm !important;
             }
             @media print {
                 html, body {
-                    width: 104mm !important;
+                    width: 80mm !important;
                     height: auto !important;
                     min-height: 0 !important;
                     display: block !important;
@@ -2699,7 +2689,34 @@ function applyDynamicPrintPageStyle(size) {
                     scale: 1 !important;
                 }
                 #print_standalone_zone {
-                    width: 104mm !important;
+                    width: 80mm !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    transform: none !important;
+                    zoom: 1 !important;
+                }
+            }
+        `;
+    } else if (size === '110x80') {
+        styleEl.textContent = `
+            @page {
+                size: 110mm 80mm !important;
+                margin: 0mm !important;
+            }
+            @media print {
+                html, body {
+                    width: 110mm !important;
+                    height: auto !important;
+                    min-height: 0 !important;
+                    display: block !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    transform: none !important;
+                    zoom: 1 !important;
+                    scale: 1 !important;
+                }
+                #print_standalone_zone {
+                    width: 110mm !important;
                     margin: 0 !important;
                     padding: 0 !important;
                     transform: none !important;
@@ -2739,8 +2756,15 @@ function applyDynamicPrintPageStyle(size) {
 
 function syncLabelSizeUI(size) {
     size = normalizeSizeCode(size);
-    const sizeTxt = (size === '110x80') ? '80 × 100 / 100 × 80 mm (Ngang)' : '65mm × 30mm (Ngang)';
-    const sizeFullTxt = (size === '110x80') ? 'Tem lớn (80 × 100 / 100 × 80 mm - Ngang)' : 'Tem nhỏ (65 × 30 mm - Ngang)';
+    let sizeTxt = '65mm × 30mm (Ngang)';
+    let sizeFullTxt = 'Tem nhỏ (65 × 30 mm - Ngang)';
+    if (size === '80x110') {
+        sizeTxt = '80 × 110 mm (Dọc)';
+        sizeFullTxt = 'Tem đứng (80 × 110 mm - Dọc)';
+    } else if (size === '110x80') {
+        sizeTxt = '110 × 80 mm (Ngang)';
+        sizeFullTxt = 'Tem lớn (110 × 80 mm - Ngang)';
+    }
 
     ['offcanvas_label_size_select', 'preview_label_size_select', 'modal_label_size_select'].forEach(id => {
         const el = document.getElementById(id);
@@ -2794,20 +2818,20 @@ function onLabelSizeChange(newSize, fromPreview = false, saveToDb = false) {
     // Update DOM classes on Preview container and Standalone Print Zone
     const previewContainer = document.getElementById('printable_labels_container');
     if (previewContainer) {
-        previewContainer.classList.remove('label-size-65x30', 'label-size-110x80');
+        previewContainer.classList.remove('label-size-65x30', 'label-size-110x80', 'label-size-80x110');
         previewContainer.classList.add('label-size-' + newSize);
         previewContainer.querySelectorAll('.box-label-item').forEach(item => {
-            item.classList.remove('label-size-65x30', 'label-size-110x80');
+            item.classList.remove('label-size-65x30', 'label-size-110x80', 'label-size-80x110');
             item.classList.add('label-size-' + newSize);
         });
     }
 
     const standaloneZone = document.getElementById('print_standalone_zone');
     if (standaloneZone) {
-        standaloneZone.classList.remove('label-size-65x30', 'label-size-110x80');
+        standaloneZone.classList.remove('label-size-65x30', 'label-size-110x80', 'label-size-80x110');
         standaloneZone.classList.add('label-size-' + newSize);
         standaloneZone.querySelectorAll('.box-label-item').forEach(item => {
-            item.classList.remove('label-size-65x30', 'label-size-110x80');
+            item.classList.remove('label-size-65x30', 'label-size-110x80', 'label-size-80x110');
             item.classList.add('label-size-' + newSize);
         });
     }
@@ -3203,8 +3227,8 @@ function validatePrePrintFrontend() {
     }
 
     const selectedSize = getActiveLabelSize();
-    if (selectedSize !== '65x30' && selectedSize !== '110x80') {
-        errors.push('Kích thước tem không hợp lệ (chỉ hỗ trợ 65x30mm hoặc 110x80mm).');
+    if (selectedSize !== '65x30' && selectedSize !== '110x80' && selectedSize !== '80x110') {
+        errors.push('Kích thước tem không hợp lệ (hỗ trợ 65x30mm, 110x80mm hoặc 80x110mm).');
     }
 
     return {
@@ -3239,12 +3263,24 @@ function showDirectPrintToast(message, isSuccess = true) {
     }, 6000);
 }
 
+// Nhận diện độ phân giải đầu in máy in (DPI) dựa trên tên máy in Windows
+function getPrinterDpi(printerName) {
+    const n = String(printerName || '').toLowerCase();
+    if (n.includes('300dpi') || n.includes('300 dpi') || n.includes('-300') || n.includes('300d') || n.includes('300')) {
+        return 300;
+    }
+    if (n.includes('600dpi') || n.includes('600 dpi') || n.includes('600')) {
+        return 600;
+    }
+    return 203; // Mặc định chuẩn máy in tem công nghiệp Zebra (8 dots/mm)
+}
+
 // Build ZPL payload for Zebra Browser Print on Client PC
-function buildZplForClientZebra(labels, labelSize) {
-    const isLarge = (normalizeSizeCode(labelSize) === '110x80');
-    // 203 DPI dots: 104mm = 832 dots, 80mm = 640 dots; 65mm = 520 dots, 30mm = 240 dots
-    const pw = isLarge ? 832 : 520;
-    const ll = isLarge ? 640 : 240;
+function buildZplForClientZebra(labels, labelSize, printerName = '') {
+    const size = normalizeSizeCode(labelSize);
+    const dpi = getPrinterDpi(printerName);
+    const is300 = (dpi === 300);
+
     let zpl = '';
     labels.forEach(lb => {
         const qrText = String(lb.qr_content || '').replace(/\^/g, ' ');
@@ -3252,32 +3288,112 @@ function buildZplForClientZebra(labels, labelSize) {
         const qty = String(lb.qty || '') + ' pcs' + (lb.weight ? ' | ' + lb.weight + ' Kg' : '');
         const lot = String(lb.lot_no || '') + (lb.supplier ? ' | ' + lb.supplier : '');
         const box = String(lb.box_no || '').replace(/\^/g, ' ');
-        if (isLarge) {
-            zpl += `^XA^CI28^PW${pw}^LL${ll}^LH0,0`;
-            zpl += `^FO28,45^BQN,2,10^FDMA,${qrText}^FS`;
-            zpl += `^FO390,55^A0N,42,42^FB420,2,4,L,0^FD${mat}^FS`;
-            zpl += `^FO390,175^GB415,3,3^FS`;
-            zpl += `^FO390,200^A0N,50,50^FD${qty}^FS`;
-            zpl += `^FO390,275^GB415,3,3^FS`;
-            zpl += `^FO390,295^A0N,34,34^FD||^FS`;
-            zpl += `^FO390,345^GB415,3,3^FS`;
-            zpl += `^FO390,370^A0N,38,38^FB420,2,4,L,0^FD${lot}^FS`;
-            zpl += `^FO390,475^GB415,3,3^FS`;
-            zpl += `^FO390,500^A0N,36,36^FD${box}^FS`;
-            zpl += `^XZ\n`;
+
+        if (size === '80x110') {
+            // ==========================================
+            // TEM ĐỨNG 80x110mm (Portrait - Rộng 80mm, Dài 110mm)
+            // ==========================================
+            if (is300) {
+                // 300 DPI: 80mm = 945 dots, 110mm = 1300 dots
+                zpl += `^XA^CI28^PW945^LL1300^LH0,0\n`;
+                zpl += `^FO240,40^BQN,2,11^FDMA,${qrText}^FS\n`;
+                zpl += `^FO30,500^GB885,4,4^FS\n`;
+                zpl += `^FO40,520^A0N,52,52^FB865,2,6,L,0^FD${mat}^FS\n`;
+                zpl += `^FO30,650^GB885,4,4^FS\n`;
+                zpl += `^FO40,670^A0N,58,58^FB865,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO30,770^GB885,4,4^FS\n`;
+                zpl += `^FO40,790^A0N,44,44^FB865,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO30,855^GB885,4,4^FS\n`;
+                zpl += `^FO40,875^A0N,48,48^FB865,2,6,L,0^FD${lot}^FS\n`;
+                zpl += `^FO30,1015^GB885,4,4^FS\n`;
+                zpl += `^FO40,1035^A0N,56,56^FB865,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^XZ\n`;
+            } else {
+                // 203 DPI: 80mm = 640 dots, 110mm = 880 dots
+                zpl += `^XA^CI28^PW640^LL880^LH0,0\n`;
+                zpl += `^FO160,25^BQN,2,8^FDMA,${qrText}^FS\n`;
+                zpl += `^FO20,340^GB600,3,3^FS\n`;
+                zpl += `^FO25,355^A0N,36,36^FB590,2,4,L,0^FD${mat}^FS\n`;
+                zpl += `^FO20,445^GB600,3,3^FS\n`;
+                zpl += `^FO25,460^A0N,40,40^FB590,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO20,525^GB600,3,3^FS\n`;
+                zpl += `^FO25,540^A0N,30,30^FB590,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO20,585^GB600,3,3^FS\n`;
+                zpl += `^FO25,600^A0N,34,34^FB590,2,4,L,0^FD${lot}^FS\n`;
+                zpl += `^FO20,695^GB600,3,3^FS\n`;
+                zpl += `^FO25,710^A0N,38,38^FB590,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^XZ\n`;
+            }
+        } else if (size === '110x80') {
+            // ==========================================
+            // TEM LỚN 110x80mm (Landscape - Rộng 110mm, Dài 80mm)
+            // ==========================================
+            if (is300) {
+                // 300 DPI: 104-110mm = 1248-1299 dots, 80mm = 945 dots
+                zpl += `^XA^CI28^PW1248^LL945^LH0,0\n`;
+                zpl += `^FO35,60^BQN,2,14^FDMA,${qrText}^FS\n`;
+                zpl += `^FO560,35^GB4,875,4^FS\n`;
+                zpl += `^FO585,50^A0N,62,62^FB640,2,6,L,0^FD${mat}^FS\n`;
+                zpl += `^FO585,215^GB640,4,4^FS\n`;
+                zpl += `^FO585,250^A0N,70,70^FB640,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO585,360^GB640,4,4^FS\n`;
+                zpl += `^FO585,395^A0N,50,50^FB640,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO585,475^GB640,4,4^FS\n`;
+                zpl += `^FO585,510^A0N,56,56^FB640,2,6,L,0^FD${lot}^FS\n`;
+                zpl += `^FO585,675^GB640,4,4^FS\n`;
+                zpl += `^FO585,715^A0N,62,62^FB640,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^XZ\n`;
+            } else {
+                // 203 DPI: 104mm = 832 dots, 80mm = 640 dots
+                zpl += `^XA^CI28^PW832^LL640^LH0,0\n`;
+                zpl += `^FO24,40^BQN,2,9^FDMA,${qrText}^FS\n`;
+                zpl += `^FO380,25^GB3,590,3^FS\n`;
+                zpl += `^FO395,35^A0N,42,42^FB420,2,4,L,0^FD${mat}^FS\n`;
+                zpl += `^FO395,145^GB420,3,3^FS\n`;
+                zpl += `^FO395,170^A0N,48,48^FB420,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO395,245^GB420,3,3^FS\n`;
+                zpl += `^FO395,270^A0N,34,34^FB420,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO395,325^GB420,3,3^FS\n`;
+                zpl += `^FO395,350^A0N,38,38^FB420,2,4,L,0^FD${lot}^FS\n`;
+                zpl += `^FO395,465^GB420,3,3^FS\n`;
+                zpl += `^FO395,490^A0N,42,42^FB420,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^XZ\n`;
+            }
         } else {
-            zpl += `^XA^CI28^PW${pw}^LL${ll}^LH0,0`;
-            zpl += `^FO14,16^BQN,2,5^FDMA,${qrText}^FS`;
-            zpl += `^FO215,18^A0N,24,24^FB295,1,0,L,0^FD${mat}^FS`;
-            zpl += `^FO215,50^GB290,2,2^FS`;
-            zpl += `^FO215,60^A0N,26,26^FD${qty}^FS`;
-            zpl += `^FO215,94^GB290,2,2^FS`;
-            zpl += `^FO215,102^A0N,20,20^FD||^FS`;
-            zpl += `^FO215,126^GB290,2,2^FS`;
-            zpl += `^FO215,136^A0N,22,22^FB295,1,0,L,0^FD${lot}^FS`;
-            zpl += `^FO215,168^GB290,2,2^FS`;
-            zpl += `^FO215,178^A0N,22,22^FD${box}^FS`;
-            zpl += `^XZ\n`;
+            // ==========================================
+            // TEM NHỎ 65x30mm (Landscape - Rộng 65mm, Dài 30mm)
+            // ==========================================
+            if (is300) {
+                // 300 DPI: 65mm = 768 dots, 30mm = 354 dots
+                zpl += `^XA^CI28^PW768^LL354^LH0,0\n`;
+                zpl += `^FO20,20^BQN,2,7^FDMA,${qrText}^FS\n`;
+                zpl += `^FO305,15^GB3,324,3^FS\n`;
+                zpl += `^FO320,20^A0N,36,36^FB435,1,0,L,0^FD${mat}^FS\n`;
+                zpl += `^FO320,68^GB435,3,3^FS\n`;
+                zpl += `^FO320,80^A0N,36,36^FB435,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO320,128^GB435,3,3^FS\n`;
+                zpl += `^FO320,140^A0N,28,28^FB435,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO320,178^GB435,3,3^FS\n`;
+                zpl += `^FO320,190^A0N,32,32^FB435,1,0,L,0^FD${lot}^FS\n`;
+                zpl += `^FO320,234^GB435,3,3^FS\n`;
+                zpl += `^FO320,248^A0N,36,36^FB435,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^XZ\n`;
+            } else {
+                // 203 DPI: 65mm = 520 dots, 30mm = 240 dots
+                zpl += `^XA^CI28^PW520^LL240^LH0,0\n`;
+                zpl += `^FO14,16^BQN,2,5^FDMA,${qrText}^FS\n`;
+                zpl += `^FO205,10^GB2,220,2^FS\n`;
+                zpl += `^FO215,14^A0N,25,25^FB295,1,0,L,0^FD${mat}^FS\n`;
+                zpl += `^FO215,48^GB295,2,2^FS\n`;
+                zpl += `^FO215,56^A0N,26,26^FB295,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO215,90^GB295,2,2^FS\n`;
+                zpl += `^FO215,98^A0N,20,20^FB295,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO215,124^GB295,2,2^FS\n`;
+                zpl += `^FO215,132^A0N,22,22^FB295,1,0,L,0^FD${lot}^FS\n`;
+                zpl += `^FO215,164^GB295,2,2^FS\n`;
+                zpl += `^FO215,174^A0N,25,25^FB295,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^XZ\n`;
+            }
         }
     });
     return zpl;
@@ -3289,13 +3405,14 @@ async function dispatchClientDirectPrint(labels, selectedPrinter, labelSize) {
         return { success: false, fallback_to_browser: true, message: 'Chế độ In Qua Trình Duyệt được chọn' };
     }
     const printerEntry = clientPrintersRegistry.find(p => p.name.toLowerCase() === String(selectedPrinter || '').toLowerCase());
+    const dpi = getPrinterDpi(selectedPrinter);
 
     const isHttps = (window.location.protocol === 'https:');
     const port = isHttps ? '9101' : '9100';
     const proto = isHttps ? 'https:' : 'http:';
     const writeUrl = `${proto}//127.0.0.1:${port}/write`;
 
-    const zplData = buildZplForClientZebra(labels, labelSize);
+    const zplData = buildZplForClientZebra(labels, labelSize, selectedPrinter);
 
     // Build standard Zebra device descriptor
     const dev = (printerEntry && printerEntry.device) ? printerEntry.device : {
@@ -3305,6 +3422,16 @@ async function dispatchClientDirectPrint(labels, selectedPrinter, labelSize) {
         deviceType: 'printer',
         version: 4
     };
+
+    console.group('[ZEBRA_PRINT_DEBUG] XUẤT LỆNH IN TRỰC TIẾP');
+    console.log('1. Máy in đích (Windows Spooler Name):', selectedPrinter);
+    console.log('2. Thiết bị Zebra Device:', dev);
+    console.log('3. Độ phân giải nhận diện (DPI):', dpi + ' DPI (' + (dpi === 300 ? '12 dpmm' : '8 dpmm') + ')');
+    console.log('4. Khổ tem chọn:', labelSize);
+    console.log('5. Số lượng tem in:', labels.length);
+    console.log('6. URL gửi lệnh:', writeUrl);
+    console.log('7. ZPL Payload mẫu (150 ký tự đầu):', zplData.substring(0, 150));
+    console.groupEnd();
 
     try {
         const ctrl = new AbortController();
@@ -3323,13 +3450,16 @@ async function dispatchClientDirectPrint(labels, selectedPrinter, labelSize) {
         });
         clearTimeout(timer);
         if (res.ok) {
+            console.log('[ZEBRA_PRINT_DEBUG] ✓ Gửi lệnh in thành công HTTP 200 OK');
             return {
                 success: true,
-                message: `Đã gửi trực tiếp ${labels.length} tem đến máy in "${selectedPrinter}" qua Zebra Browser Print.`
+                message: `Đã gửi trực tiếp ${labels.length} tem (${labelSize}) đến máy in "${selectedPrinter}" (${dpi} DPI).`
             };
+        } else {
+            console.warn('[ZEBRA_PRINT_DEBUG] ✗ Lỗi phản hồi HTTP từ Browser Print:', res.status, res.statusText);
         }
     } catch (e) {
-        console.warn('Lỗi gửi lệnh in Zebra Browser Print:', e);
+        console.error('[ZEBRA_PRINT_DEBUG] ✗ Lỗi kết nối dịch vụ Zebra Browser Print:', e);
     }
 
     return {

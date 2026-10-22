@@ -215,7 +215,8 @@ require_once __DIR__ . '/includes/header.php';
                             </label>
                             <select name="default_label_size" id="settings_default_label_size" class="form-select fw-bold" onchange="updateSettingsLabelPreview(this.value)">
                                 <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang)</option>
-                                <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (80 × 100 / 100 × 80 / 110 × 80 mm - Ngang)</option>
+                                <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (110 × 80 mm - Ngang)</option>
+                                <option value="80x110" <?= ($defaultLabelSize === '80x110') ? 'selected' : '' ?>>Tem đứng (80 × 110 mm - Dọc)</option>
                             </select>
                         </div>
                         <div class="col-md-3">
@@ -675,27 +676,7 @@ async function refreshSettingsClientPrinters(showFeedback = false, forceRefresh 
         discovered.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.name;
-            let connBadge = '';
-            if (p.source === 'zebra' || p.source === 'zebra_browser_print') {
-                connBadge = ' [Zebra Local]';
-            } else if (p.source === 'qz' || p.source === 'qz_tray') {
-                connBadge = ' [Windows/QZ Tray]';
-            } else if (p.source === 'webusb' || p.source === 'usb') {
-                connBadge = ' [USB Client]';
-            } else if (p.source === 'client_custom') {
-                connBadge = ' [Máy in cục bộ]';
-            } else if (p.is_network) {
-                connBadge = ` [Mạng LAN${p.port ? ': ' + p.port : ''}]`;
-            } else if (p.is_shared) {
-                connBadge = ' [Shared]';
-            } else {
-                connBadge = ' [Cục bộ]';
-            }
-
-            if (p.is_thermal) connBadge += ' (Tem)';
-            if (p.default)    connBadge += ' (Mặc định)';
-
-            opt.textContent = '🖨️ ' + p.name + connBadge;
+            opt.textContent = p.name;
             if (selectedPrinter && p.name.toLowerCase() === selectedPrinter.toLowerCase()) opt.selected = true;
             sel.appendChild(opt);
         });
@@ -741,9 +722,17 @@ function updateSettingsLabelPreview(size) {
     const box = document.getElementById('settings_preview_box');
     const lbl = document.getElementById('settings_preview_size_label');
     if (!box) return;
-    box.classList.remove('label-size-65x30', 'label-size-110x80');
+    box.classList.remove('label-size-65x30', 'label-size-110x80', 'label-size-80x110');
     box.classList.add('label-size-' + size);
-    if (lbl) lbl.innerText = (size === '110x80') ? '80 × 100 / 100 × 80 mm (Ngang)' : '65mm × 30mm (Ngang)';
+    if (lbl) {
+        if (size === '80x110') {
+            lbl.innerText = '80 × 110 mm (Dọc)';
+        } else if (size === '110x80') {
+            lbl.innerText = '110 × 80 mm (Ngang)';
+        } else {
+            lbl.innerText = '65 × 30 mm (Ngang)';
+        }
+    }
 }
 
 function addFieldSlot() {
