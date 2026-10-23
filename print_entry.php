@@ -522,6 +522,13 @@ function onEntryLabelSizeChange(size) {
     try { localStorage.setItem('printbox_default_label_size', size); } catch (e) {}
     applyEntryPrintPageStyle(size);
 
+    logEntryLabelDimensionAudit({
+        stage: 'CONFIG_SELECT',
+        selectedSize: size,
+        scale: '100% (Chuẩn xưởng, không co giãn)',
+        orientation: (size === '80x110') ? 'portrait (Dọc)' : 'landscape (Ngang)'
+    });
+
     const mockBox = document.getElementById('entry_mock_label_box');
     if (mockBox) {
         mockBox.classList.remove('label-size-65x30', 'label-size-110x80', 'label-size-80x110');
@@ -676,10 +683,33 @@ function logEntryPrintOperation({
     console.groupEnd();
 }
 
+// Ghi nhận chi tiết kiểm toán kích thước tem theo đúng yêu cầu hệ thống
+function logEntryLabelDimensionAudit({
+    stage,
+    selectedSize,
+    printerName = '',
+    dpi = 203,
+    templateDimensions = '',
+    payloadSize = '',
+    dialogPageSize = '',
+    scale = '100% (Tỷ lệ thực tế 1:1, không co giãn)',
+    orientation = 'landscape'
+}) {
+    console.group(`%c[AUDIT_LABEL_SIZE (ENTRY)] 📐 ${stage} - Khổ: ${selectedSize} - ${new Date().toLocaleTimeString('vi-VN')}`, 'color:#0284c7;font-weight:bold;');
+    console.log('1. Kích thước tem được chọn:', selectedSize);
+    if (printerName) console.log('2. Máy in đích:', printerName + (dpi ? ` (${dpi} DPI)` : ''));
+    if (templateDimensions) console.log('3. Kích thước template render:', templateDimensions);
+    if (payloadSize) console.log('4. Kích thước gửi tới Browser Print:', payloadSize);
+    if (dialogPageSize) console.log('5. Kích thước gửi cho Print Dialog:', dialogPageSize);
+    console.log('6. Scale thực tế:', scale);
+    console.log('7. Orientation thực tế:', orientation);
+    console.groupEnd();
+}
+
 // Nhận diện độ phân giải đầu in máy in (DPI) dựa trên tên máy in Windows
 function getPrinterDpi(printerName) {
     const n = String(printerName || '').toLowerCase();
-    if (n.includes('300dpi') || n.includes('300 dpi') || n.includes('-300') || n.includes('300d') || n.includes('300')) {
+    if (n.includes('300dpi') || n.includes('300 dpi') || n.includes('-300') || n.includes('300d')) {
         return 300;
     }
     if (n.includes('600dpi') || n.includes('600 dpi') || n.includes('600')) {
@@ -688,6 +718,8 @@ function getPrinterDpi(printerName) {
     return 203; // Mặc định chuẩn máy in tem công nghiệp Zebra (8 dots/mm)
 }
 
+// Build ZPL payload for Zebra Browser Print on Client PC - Đồng nhất 1:1 với HTML Preview
+// Tự động co giãn cỡ chữ (Adaptive font scaling) & cho phép ngắt 2 dòng để không bị cắt đuôi mã hoặc mất thông tin
 function buildZplForEntryZebra(labels, labelSize, printerName = '') {
     const size = normalizeEntrySize(labelSize);
     const dpi = getPrinterDpi(printerName);
@@ -707,33 +739,29 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
             // ==========================================
             if (is300) {
                 // 300 DPI: 80mm = 945 dots, 110mm = 1300 dots
+                const matFont = (mat.length > 25) ? '^A0N,50,44^FB865,2,4,L,0' : '^A0N,62,58^FB865,2,6,L,0';
+                const lotFont = (lot.length > 25) ? '^A0N,50,44^FB865,2,4,L,0' : '^A0N,60,54^FB865,2,6,L,0';
                 zpl += `^XA^CI28^PW945^LL1300^LH0,0\n`;
-                zpl += `^FO240,40^BQN,2,11^FDMA,${qrText}^FS\n`;
-                zpl += `^FO30,500^GB885,4,4^FS\n`;
-                zpl += `^FO40,520^A0N,52,52^FB865,2,6,L,0^FD${mat}^FS\n`;
-                zpl += `^FO30,650^GB885,4,4^FS\n`;
-                zpl += `^FO40,670^A0N,58,58^FB865,1,0,L,0^FD${qty}^FS\n`;
-                zpl += `^FO30,770^GB885,4,4^FS\n`;
-                zpl += `^FO40,790^A0N,44,44^FB865,1,0,L,0^FD||^FS\n`;
-                zpl += `^FO30,855^GB885,4,4^FS\n`;
-                zpl += `^FO40,875^A0N,48,48^FB865,2,6,L,0^FD${lot}^FS\n`;
-                zpl += `^FO30,1015^GB885,4,4^FS\n`;
-                zpl += `^FO40,1035^A0N,56,56^FB865,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO192,40^BQN,2,12^FDMA,${qrText}^FS\n`;
+                zpl += `^FO40,630${matFont}^FD${mat}^FS\n`;
+                zpl += `^FO40,785^A0N,68,64^FB865,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO40,910^A0N,54,54^FB865,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO40,1000${lotFont}^FD${lot}^FS\n`;
+                zpl += `^FO40,1150^GB865,4,4^FS\n`;
+                zpl += `^FO40,1190^A0N,68,64^FB865,1,0,L,0^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             } else {
                 // 203 DPI: 80mm = 640 dots, 110mm = 880 dots
+                const matFont = (mat.length > 25) ? '^A0N,34,30^FB590,2,2,L,0' : '^A0N,42,40^FB590,2,4,L,0';
+                const lotFont = (lot.length > 25) ? '^A0N,34,30^FB590,2,2,L,0' : '^A0N,40,36^FB590,2,4,L,0';
                 zpl += `^XA^CI28^PW640^LL880^LH0,0\n`;
-                zpl += `^FO160,25^BQN,2,8^FDMA,${qrText}^FS\n`;
-                zpl += `^FO20,340^GB600,3,3^FS\n`;
-                zpl += `^FO25,355^A0N,36,36^FB590,2,4,L,0^FD${mat}^FS\n`;
-                zpl += `^FO20,445^GB600,3,3^FS\n`;
-                zpl += `^FO25,460^A0N,40,40^FB590,1,0,L,0^FD${qty}^FS\n`;
-                zpl += `^FO20,525^GB600,3,3^FS\n`;
-                zpl += `^FO25,540^A0N,30,30^FB590,1,0,L,0^FD||^FS\n`;
-                zpl += `^FO20,585^GB600,3,3^FS\n`;
-                zpl += `^FO25,600^A0N,34,34^FB590,2,4,L,0^FD${lot}^FS\n`;
-                zpl += `^FO20,695^GB600,3,3^FS\n`;
-                zpl += `^FO25,710^A0N,38,38^FB590,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO130,25^BQN,2,8^FDMA,${qrText}^FS\n`;
+                zpl += `^FO25,425${matFont}^FD${mat}^FS\n`;
+                zpl += `^FO25,530^A0N,46,44^FB590,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO25,615^A0N,36,36^FB590,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO25,675${lotFont}^FD${lot}^FS\n`;
+                zpl += `^FO25,780^GB590,3,3^FS\n`;
+                zpl += `^FO25,805^A0N,46,44^FB590,1,0,L,0^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             }
         } else if (size === '110x80') {
@@ -741,34 +769,34 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
             // TEM LỚN 110x80mm (Landscape - Rộng 110mm, Dài 80mm)
             // ==========================================
             if (is300) {
-                // 300 DPI: 104-110mm = 1248-1299 dots, 80mm = 945 dots
-                zpl += `^XA^CI28^PW1248^LL945^LH0,0\n`;
-                zpl += `^FO35,60^BQN,2,14^FDMA,${qrText}^FS\n`;
-                zpl += `^FO560,35^GB4,875,4^FS\n`;
-                zpl += `^FO585,50^A0N,62,62^FB640,2,6,L,0^FD${mat}^FS\n`;
-                zpl += `^FO585,215^GB640,4,4^FS\n`;
-                zpl += `^FO585,250^A0N,70,70^FB640,1,0,L,0^FD${qty}^FS\n`;
-                zpl += `^FO585,360^GB640,4,4^FS\n`;
-                zpl += `^FO585,395^A0N,50,50^FB640,1,0,L,0^FD||^FS\n`;
-                zpl += `^FO585,475^GB640,4,4^FS\n`;
-                zpl += `^FO585,510^A0N,56,56^FB640,2,6,L,0^FD${lot}^FS\n`;
-                zpl += `^FO585,675^GB640,4,4^FS\n`;
-                zpl += `^FO585,715^A0N,62,62^FB640,1,0,L,0^FD${box}^FS\n`;
+                // 300 DPI: 110mm = 1300 dots, 80mm = 945 dots
+                const matFont = (mat.length > 20) ? '^A0N,56,50^FB525,2,4,L,0' : ((mat.length > 12) ? '^A0N,68,60^FB525,2,4,L,0' : '^A0N,80,75^FB525,2,4,L,0');
+                const lotFont = (lot.length > 20) ? '^A0N,52,44^FB525,2,4,L,0' : ((lot.length > 12) ? '^A0N,60,52^FB525,2,4,L,0' : '^A0N,68,60^FB525,2,4,L,0');
+                const boxFont = (box.length > 20)  ? '^A0N,45,40^FB600,2,4,L,0'  : ((box.length > 12)  ? '^A0N,55,50^FB600,2,4,L,0' : '^A0N,64,60^FB600,2,4,L,0');
+                zpl += `^XA^CI28^PW1300^LL945^LH0,0\n`;
+                zpl += `^FO35,125^BQN,2,15^FDMA,${qrText}^FS\n`;
+                zpl += `^FO755,65${matFont}^FD${mat}^FS\n`;
+                zpl += `^FO755,245^A0N,80,75^FB525,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO755,395^A0N,62,62^FB525,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO755,505${lotFont}^FD${lot}^FS\n`;
+                zpl += `^FO755,710^GB525,4,4^FS\n`;
+                // zpl += `^FO180,745^A0N,64,60^FB600,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO680,745${boxFont}^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             } else {
-                // 203 DPI: 104mm = 832 dots, 80mm = 640 dots
-                zpl += `^XA^CI28^PW832^LL640^LH0,0\n`;
-                zpl += `^FO24,40^BQN,2,9^FDMA,${qrText}^FS\n`;
-                zpl += `^FO380,25^GB3,590,3^FS\n`;
-                zpl += `^FO395,35^A0N,42,42^FB420,2,4,L,0^FD${mat}^FS\n`;
-                zpl += `^FO395,145^GB420,3,3^FS\n`;
-                zpl += `^FO395,170^A0N,48,48^FB420,1,0,L,0^FD${qty}^FS\n`;
-                zpl += `^FO395,245^GB420,3,3^FS\n`;
-                zpl += `^FO395,270^A0N,34,34^FB420,1,0,L,0^FD||^FS\n`;
-                zpl += `^FO395,325^GB420,3,3^FS\n`;
-                zpl += `^FO395,350^A0N,38,38^FB420,2,4,L,0^FD${lot}^FS\n`;
-                zpl += `^FO395,465^GB420,3,3^FS\n`;
-                zpl += `^FO395,490^A0N,42,42^FB420,1,0,L,0^FD${box}^FS\n`;
+                // 203 DPI: 110mm = 880 dots, 80mm = 640 dots
+                const matFont = (mat.length > 20) ? '^A0N,38,34^FB355,2,2,L,0' : ((mat.length > 12) ? '^A0N,46,40^FB355,2,2,L,0' : '^A0N,54,50^FB355,2,2,L,0');
+                const lotFont = (lot.length > 20) ? '^A0N,36,30^FB355,2,2,L,0' : ((lot.length > 12) ? '^A0N,42,36^FB355,2,2,L,0' : '^A0N,46,42^FB355,2,2,L,0');
+                const boxFont = (box.length > 20) ? '^A0N,30,26^FB420,2,2,L,0' : ((box.length > 12)  ? '^A0N,36,32^FB420,2,2,L,0' : '^A0N,42,38^FB420,2,2,L,0');
+                zpl += `^XA^CI28^PW880^LL640^LH0,0\n`;
+                zpl += `^FO24,85^BQN,2,10^FDMA,${qrText}^FS\n`;
+                zpl += `^FO510,45${matFont}^FD${mat}^FS\n`;
+                zpl += `^FO510,165^A0N,54,50^FB355,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO510,265^A0N,42,42^FB355,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO510,342${lotFont}^FD${lot}^FS\n`;
+                zpl += `^FO510,480^GB355,3,3^FS\n`;
+                // zpl += `^FO150,505^A0N,42,38^FB420,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO430,505${boxFont}^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             }
         } else {
@@ -777,33 +805,29 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
             // ==========================================
             if (is300) {
                 // 300 DPI: 65mm = 768 dots, 30mm = 354 dots
+                const matFont = (mat.length > 20) ? '^A0N,28,24^FB435,2,0,L,0' : ((mat.length > 11) ? '^A0N,34,30^FB435,2,0,L,0' : '^A0N,40,38^FB435,1,0,L,0');
+                const lotFont = (lot.length > 20) ? '^A0N,26,22^FB435,2,0,L,0' : ((lot.length > 12) ? '^A0N,32,26^FB435,2,0,L,0' : '^A0N,36,32^FB435,1,0,L,0');
                 zpl += `^XA^CI28^PW768^LL354^LH0,0\n`;
-                zpl += `^FO20,20^BQN,2,7^FDMA,${qrText}^FS\n`;
-                zpl += `^FO305,15^GB3,324,3^FS\n`;
-                zpl += `^FO320,20^A0N,36,36^FB435,1,0,L,0^FD${mat}^FS\n`;
-                zpl += `^FO320,68^GB435,3,3^FS\n`;
-                zpl += `^FO320,80^A0N,36,36^FB435,1,0,L,0^FD${qty}^FS\n`;
-                zpl += `^FO320,128^GB435,3,3^FS\n`;
-                zpl += `^FO320,140^A0N,28,28^FB435,1,0,L,0^FD||^FS\n`;
-                zpl += `^FO320,184^GB435,3,3^FS\n`;
-                zpl += `^FO320,196^A0N,30,30^FB435,1,0,L,0^FD${lot}^FS\n`;
-                zpl += `^FO320,244^GB435,3,3^FS\n`;
-                zpl += `^FO320,256^A0N,36,36^FB435,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO22,32^BQN,2,7^FDMA,${qrText}^FS\n`;
+                zpl += `^FO320,18${matFont}^FD${mat}^FS\n`;
+                zpl += `^FO320,86^A0N,38,36^FB435,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO320,144^A0N,32,32^FB435,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO320,186${lotFont}^FD${lot}^FS\n`;
+                zpl += `^FO320,250^GB435,3,3^FS\n`;
+                zpl += `^FO320,268^A0N,40,38^FB435,1,0,L,0^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             } else {
                 // 203 DPI: 65mm = 520 dots, 30mm = 240 dots
+                const matFont = (mat.length > 20) ? '^A0N,20,16^FB295,2,0,L,0' : ((mat.length > 11) ? '^A0N,24,20^FB295,2,0,L,0' : '^A0N,28,26^FB295,1,0,L,0');
+                const lotFont = (lot.length > 20) ? '^A0N,18,15^FB295,2,0,L,0' : ((lot.length > 12) ? '^A0N,22,18^FB295,2,0,L,0' : '^A0N,24,22^FB295,1,0,L,0');
                 zpl += `^XA^CI28^PW520^LL240^LH0,0\n`;
-                zpl += `^FO18,15^BQN,2,5^FDMA,${qrText}^FS\n`;
-                zpl += `^FO220,12^GB2,216,2^FS\n`;
-                zpl += `^FO230,16^A0N,26,26^FB280,1,0,L,0^FD${mat}^FS\n`;
-                zpl += `^FO230,52^GB280,2,2^FS\n`;
-                zpl += `^FO230,60^A0N,28,28^FB280,1,0,L,0^FD${qty}^FS\n`;
-                zpl += `^FO230,94^GB280,2,2^FS\n`;
-                zpl += `^FO230,102^A0N,20,20^FB280,1,0,L,0^FD||^FS\n`;
-                zpl += `^FO230,130^GB280,2,2^FS\n`;
-                zpl += `^FO230,138^A0N,22,22^FB280,1,0,L,0^FD${lot}^FS\n`;
-                zpl += `^FO230,172^GB280,2,2^FS\n`;
-                zpl += `^FO230,180^A0N,26,26^FB280,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO15,22^BQN,2,5^FDMA,${qrText}^FS\n`;
+                zpl += `^FO215,12${matFont}^FD${mat}^FS\n`;
+                zpl += `^FO215,58^A0N,26,24^FB295,1,0,L,0^FD${qty}^FS\n`;
+                zpl += `^FO215,98^A0N,22,22^FB295,1,0,L,0^FD||^FS\n`;
+                zpl += `^FO215,126${lotFont}^FD${lot}^FS\n`;
+                zpl += `^FO215,170^GB295,2,2^FS\n`;
+                zpl += `^FO215,182^A0N,28,26^FB295,1,0,L,0^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             }
         }
@@ -833,6 +857,22 @@ async function dispatchEntryClientDirectPrint(labels, selectedPrinter, labelSize
         deviceType: 'printer',
         version: 4
     };
+
+    const zplDims = (normalizedSize === '80x110')
+        ? (is300 ? '945 × 1300 dots (80 × 110 mm Dọc)' : '640 × 880 dots (80 × 110 mm Dọc)')
+        : ((normalizedSize === '110x80')
+            ? (is300 ? '1300 × 945 dots (110 × 80 mm Ngang)' : '880 × 640 dots (110 × 80 mm Ngang)')
+            : (is300 ? '768 × 354 dots (65 × 30 mm Ngang)' : '520 × 240 dots (65 × 30 mm Ngang)'));
+
+    logEntryLabelDimensionAudit({
+        stage: 'BROWSER_PRINT_DISPATCH',
+        selectedSize: labelSize,
+        printerName: selectedPrinter,
+        dpi: dpi,
+        payloadSize: zplDims,
+        scale: '100% (Native ZPL dots, tỷ lệ thực tế 1:1, không scale)',
+        orientation: (normalizedSize === '80x110') ? 'portrait (Dọc)' : 'landscape (Ngang)'
+    });
 
     console.group(`%c[ZEBRA_PRINT_DEBUG] Lệnh in trực tiếp qua Zebra Browser Print (Entry)`, 'color:#2563eb;font-weight:bold;');
     console.log('📌 Máy in đích:', selectedPrinter);
@@ -1567,10 +1607,19 @@ document.getElementById('btn_final_submit').addEventListener('click', function()
     executeEntryPrintSubmission();
 });
 
-// RENDER DANH SÁCH TEM THÙNG ĐỂ IN (CHUẨN 65x30MM & 110x80MM NGANG)
+// RENDER DANH SÁCH TEM THÙNG ĐỂ IN (CHUẨN 65x30MM, 110x80MM NGANG, 80x110MM DỌC)
 function renderPrintedLabels(labels) {
     const currentSize = getEntryLabelSize();
     applyEntryPrintPageStyle(currentSize);
+
+    const templateDesc = (currentSize === '80x110') ? '80mm × 110mm (Dọc)' : ((currentSize === '110x80') ? '110mm × 80mm (Ngang)' : '65mm × 30mm (Ngang)');
+    logEntryLabelDimensionAudit({
+        stage: 'TEMPLATE_RENDER',
+        selectedSize: currentSize,
+        templateDimensions: templateDesc,
+        scale: '100% (Tỷ lệ thực tế 1:1, không qua trung gian)',
+        orientation: (currentSize === '80x110') ? 'portrait (Dọc)' : 'landscape (Ngang)'
+    });
 
     const container = document.getElementById('printable_labels_container');
     if (container) {
@@ -1587,16 +1636,46 @@ function renderPrintedLabels(labels) {
     standaloneZone.className = 'print-standalone-zone label-size-' + currentSize;
     standaloneZone.innerHTML = '';
 
-    labels.forEach((item) => {
+    labels.forEach((item, index) => {
+        const mat = String(item.material_name || '');
+        const lot = String(item.lot_no || '');
+        const supplier = String(item.supplier || '');
+        const lotWithSupplier = lot + (supplier ? ' | ' + supplier : '');
+
+        // Dynamic font class for long material name and lot number to prevent text truncation
+        let l1Class = 'label-line-1';
+        if (currentSize === '65x30') {
+            if (mat.length > 20) l1Class += ' label-font-xs';
+            else if (mat.length > 12) l1Class += ' label-font-sm';
+        } else if (currentSize === '110x80') {
+            if (mat.length > 22) l1Class += ' label-font-xs';
+            else if (mat.length > 14) l1Class += ' label-font-sm';
+        } else {
+            if (mat.length > 26) l1Class += ' label-font-xs';
+            else if (mat.length > 16) l1Class += ' label-font-sm';
+        }
+
+        let l4Class = 'label-line-4';
+        if (currentSize === '65x30') {
+            if (lotWithSupplier.length > 22) l4Class += ' label-font-xs';
+            else if (lotWithSupplier.length > 13) l4Class += ' label-font-sm';
+        } else if (currentSize === '110x80') {
+            if (lotWithSupplier.length > 24) l4Class += ' label-font-xs';
+            else if (lotWithSupplier.length > 15) l4Class += ' label-font-sm';
+        } else {
+            if (lotWithSupplier.length > 28) l4Class += ' label-font-xs';
+            else if (lotWithSupplier.length > 18) l4Class += ' label-font-sm';
+        }
+
         const labelHtml = `
             <div class="label-qr-col">
-                <img src="${item.qr_base64}" alt="QR">
+                <img src="${item.qr_base64}" alt="QR" loading="eager">
             </div>
             <div class="label-text-col">
-                <div class="label-line-1">${escapeHtml(item.material_name)}</div>
+                <div class="${l1Class}">${escapeHtml(mat)}</div>
                 <div class="label-line-2">${item.qty} pcs ${item.weight ? '| ' + item.weight + ' Kg' : ''}</div>
                 <div class="label-line-3">||</div>
-                <div class="label-line-4">${escapeHtml(item.lot_no)} ${item.supplier ? '| ' + escapeHtml(item.supplier) : ''}</div>
+                <div class="${l4Class}">${escapeHtml(lot)}${supplier ? ' | ' + escapeHtml(supplier) : ''}</div>
                 <div class="label-line-5">${escapeHtml(item.box_no)}</div>
             </div>
         `;
@@ -1610,12 +1689,25 @@ function renderPrintedLabels(labels) {
         printDiv.className = 'box-label-item label-size-' + currentSize;
         printDiv.innerHTML = labelHtml;
         standaloneZone.appendChild(printDiv);
+
+        console.log(` - Tem #${index + 1}: Mã SP (${mat.length} ký tự, class=${l1Class}): "${mat}", Lot+NCC (${lotWithSupplier.length} ký tự, class=${l4Class}): "${lotWithSupplier}"`);
     });
 }
 
 // IN TRỰC TIẾP RA MÁY IN MẠNG / IN TRÌNH DUYỆT (CHỜ QR RENDER HOÀN TẤT TRƯỚC KHI IN)
 function triggerDirectPrint(onAfterPrint) {
-    applyEntryPrintPageStyle(getEntryLabelSize());
+    const curSize = getEntryLabelSize();
+    applyEntryPrintPageStyle(curSize);
+
+    const pageSizeDesc = (curSize === '80x110') ? '@page { size: 80mm 110mm; margin: 0; }' : ((curSize === '110x80') ? '@page { size: 110mm 80mm; margin: 0; }' : '@page { size: 65mm 30mm; margin: 0; }');
+    logEntryLabelDimensionAudit({
+        stage: 'PRINT_DIALOG_DISPATCH',
+        selectedSize: curSize,
+        dialogPageSize: pageSizeDesc,
+        scale: '100% (zoom: 1, scale: 1, transform: none)',
+        orientation: (curSize === '80x110') ? 'portrait (Dọc)' : 'landscape (Ngang)'
+    });
+
     const standaloneZone = document.getElementById('print_standalone_zone');
     const imgs = standaloneZone ? Array.from(standaloneZone.querySelectorAll('img')) : [];
     const waitPromises = imgs.map(img => {
