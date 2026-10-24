@@ -741,6 +741,7 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 // 300 DPI: 80mm = 945 dots, 110mm = 1300 dots
                 const matFont = (mat.length > 25) ? '^A0N,50,44^FB865,2,4,L,0' : '^A0N,62,58^FB865,2,6,L,0';
                 const lotFont = (lot.length > 25) ? '^A0N,50,44^FB865,2,4,L,0' : '^A0N,60,54^FB865,2,6,L,0';
+                const boxFont = (box.length > 16) ? '^A0N,50,44^FB865,2,4,L,0' : ((box.length > 12) ? '^A0N,58,52^FB865,2,4,L,0' : '^A0N,68,64^FB865,1,0,L,0');
                 zpl += `^XA^CI28^PW945^LL1300^LH0,0\n`;
                 zpl += `^FO192,40^BQN,2,12^FDMA,${qrText}^FS\n`;
                 zpl += `^FO40,630${matFont}^FD${mat}^FS\n`;
@@ -748,12 +749,13 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 zpl += `^FO40,910^A0N,54,54^FB865,1,0,L,0^FD||^FS\n`;
                 zpl += `^FO40,1000${lotFont}^FD${lot}^FS\n`;
                 zpl += `^FO40,1150^GB865,4,4^FS\n`;
-                zpl += `^FO40,1190^A0N,68,64^FB865,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO40,1190${boxFont}^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             } else {
                 // 203 DPI: 80mm = 640 dots, 110mm = 880 dots
                 const matFont = (mat.length > 25) ? '^A0N,34,30^FB590,2,2,L,0' : '^A0N,42,40^FB590,2,4,L,0';
                 const lotFont = (lot.length > 25) ? '^A0N,34,30^FB590,2,2,L,0' : '^A0N,40,36^FB590,2,4,L,0';
+                const boxFont = (box.length > 16) ? '^A0N,34,30^FB590,2,2,L,0' : ((box.length > 12) ? '^A0N,40,36^FB590,2,2,L,0' : '^A0N,46,44^FB590,1,0,L,0');
                 zpl += `^XA^CI28^PW640^LL880^LH0,0\n`;
                 zpl += `^FO130,25^BQN,2,8^FDMA,${qrText}^FS\n`;
                 zpl += `^FO25,425${matFont}^FD${mat}^FS\n`;
@@ -761,7 +763,7 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 zpl += `^FO25,615^A0N,36,36^FB590,1,0,L,0^FD||^FS\n`;
                 zpl += `^FO25,675${lotFont}^FD${lot}^FS\n`;
                 zpl += `^FO25,780^GB590,3,3^FS\n`;
-                zpl += `^FO25,805^A0N,46,44^FB590,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO25,805${boxFont}^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             }
         } else if (size === '110x80') {
@@ -772,7 +774,7 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 // 300 DPI: 110mm = 1300 dots, 80mm = 945 dots
                 const matFont = (mat.length > 20) ? '^A0N,56,50^FB525,2,4,L,0' : ((mat.length > 12) ? '^A0N,68,60^FB525,2,4,L,0' : '^A0N,80,75^FB525,2,4,L,0');
                 const lotFont = (lot.length > 20) ? '^A0N,52,44^FB525,2,4,L,0' : ((lot.length > 12) ? '^A0N,60,52^FB525,2,4,L,0' : '^A0N,68,60^FB525,2,4,L,0');
-                const boxFont = (box.length > 20)  ? '^A0N,45,40^FB600,2,4,L,0'  : ((box.length > 12)  ? '^A0N,55,50^FB600,2,4,L,0' : '^A0N,64,60^FB600,2,4,L,0');
+                const boxFont = (box.length > 16) ? '^A0N,52,44^FB540,2,4,L,0' : ((box.length > 12) ? '^A0N,64,52^FB540,2,4,L,0' : '^A0N,78,64^FB540,1,0,L,0');
                 zpl += `^XA^CI28^PW1300^LL945^LH0,0\n`;
                 zpl += `^FO35,125^BQN,2,15^FDMA,${qrText}^FS\n`;
                 zpl += `^FO755,65${matFont}^FD${mat}^FS\n`;
@@ -780,14 +782,14 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 zpl += `^FO755,395^A0N,62,62^FB525,1,0,L,0^FD||^FS\n`;
                 zpl += `^FO755,505${lotFont}^FD${lot}^FS\n`;
                 zpl += `^FO755,710^GB525,4,4^FS\n`;
-                // zpl += `^FO180,745^A0N,64,60^FB600,1,0,L,0^FD${box}^FS\n`;
-                zpl += `^FO680,745${boxFont}^FD${box}^FS\n`;
+                console.log('BOX =', box);
+                zpl += `^FO755,745${boxFont}^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             } else {
                 // 203 DPI: 110mm = 880 dots, 80mm = 640 dots
                 const matFont = (mat.length > 20) ? '^A0N,38,34^FB355,2,2,L,0' : ((mat.length > 12) ? '^A0N,46,40^FB355,2,2,L,0' : '^A0N,54,50^FB355,2,2,L,0');
                 const lotFont = (lot.length > 20) ? '^A0N,36,30^FB355,2,2,L,0' : ((lot.length > 12) ? '^A0N,42,36^FB355,2,2,L,0' : '^A0N,46,42^FB355,2,2,L,0');
-                const boxFont = (box.length > 20) ? '^A0N,30,26^FB420,2,2,L,0' : ((box.length > 12)  ? '^A0N,36,32^FB420,2,2,L,0' : '^A0N,42,38^FB420,2,2,L,0');
+                const boxFont = (box.length > 16) ? '^A0N,36,30^FB370,2,2,L,0' : ((box.length > 12) ? '^A0N,44,36^FB370,2,2,L,0' : '^A0N,52,42^FB370,1,0,L,0');
                 zpl += `^XA^CI28^PW880^LL640^LH0,0\n`;
                 zpl += `^FO24,85^BQN,2,10^FDMA,${qrText}^FS\n`;
                 zpl += `^FO510,45${matFont}^FD${mat}^FS\n`;
@@ -795,8 +797,8 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 zpl += `^FO510,265^A0N,42,42^FB355,1,0,L,0^FD||^FS\n`;
                 zpl += `^FO510,342${lotFont}^FD${lot}^FS\n`;
                 zpl += `^FO510,480^GB355,3,3^FS\n`;
-                // zpl += `^FO150,505^A0N,42,38^FB420,1,0,L,0^FD${box}^FS\n`;
-                zpl += `^FO430,505${boxFont}^FD${box}^FS\n`;
+                console.log('BOX =', box);
+                zpl += `^FO510,505${boxFont}^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             }
         } else {
@@ -807,6 +809,7 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 // 300 DPI: 65mm = 768 dots, 30mm = 354 dots
                 const matFont = (mat.length > 20) ? '^A0N,28,24^FB435,2,0,L,0' : ((mat.length > 11) ? '^A0N,34,30^FB435,2,0,L,0' : '^A0N,40,38^FB435,1,0,L,0');
                 const lotFont = (lot.length > 20) ? '^A0N,26,22^FB435,2,0,L,0' : ((lot.length > 12) ? '^A0N,32,26^FB435,2,0,L,0' : '^A0N,36,32^FB435,1,0,L,0');
+                const boxFont = (box.length > 16) ? '^A0N,28,24^FB445,2,0,L,0' : ((box.length > 12) ? '^A0N,34,28^FB445,2,0,L,0' : '^A0N,40,34^FB445,1,0,L,0');
                 zpl += `^XA^CI28^PW768^LL354^LH0,0\n`;
                 zpl += `^FO22,32^BQN,2,7^FDMA,${qrText}^FS\n`;
                 zpl += `^FO320,18${matFont}^FD${mat}^FS\n`;
@@ -814,12 +817,13 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 zpl += `^FO320,144^A0N,32,32^FB435,1,0,L,0^FD||^FS\n`;
                 zpl += `^FO320,186${lotFont}^FD${lot}^FS\n`;
                 zpl += `^FO320,250^GB435,3,3^FS\n`;
-                zpl += `^FO320,268^A0N,40,38^FB435,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO320,268${boxFont}^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             } else {
                 // 203 DPI: 65mm = 520 dots, 30mm = 240 dots
                 const matFont = (mat.length > 20) ? '^A0N,20,16^FB295,2,0,L,0' : ((mat.length > 11) ? '^A0N,24,20^FB295,2,0,L,0' : '^A0N,28,26^FB295,1,0,L,0');
                 const lotFont = (lot.length > 20) ? '^A0N,18,15^FB295,2,0,L,0' : ((lot.length > 12) ? '^A0N,22,18^FB295,2,0,L,0' : '^A0N,24,22^FB295,1,0,L,0');
+                const boxFont = (box.length > 16) ? '^A0N,20,16^FB305,2,0,L,0' : ((box.length > 12) ? '^A0N,24,19^FB305,2,0,L,0' : '^A0N,28,24^FB305,1,0,L,0');
                 zpl += `^XA^CI28^PW520^LL240^LH0,0\n`;
                 zpl += `^FO15,22^BQN,2,5^FDMA,${qrText}^FS\n`;
                 zpl += `^FO215,12${matFont}^FD${mat}^FS\n`;
@@ -827,7 +831,7 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
                 zpl += `^FO215,98^A0N,22,22^FB295,1,0,L,0^FD||^FS\n`;
                 zpl += `^FO215,126${lotFont}^FD${lot}^FS\n`;
                 zpl += `^FO215,170^GB295,2,2^FS\n`;
-                zpl += `^FO215,182^A0N,28,26^FB295,1,0,L,0^FD${box}^FS\n`;
+                zpl += `^FO215,182${boxFont}^FD${box}^FS\n`;
                 zpl += `^XZ\n`;
             }
         }
@@ -838,6 +842,104 @@ function buildZplForEntryZebra(labels, labelSize, printerName = '') {
 async function dispatchEntryClientDirectPrint(labels, selectedPrinter, labelSize) {
     if (!selectedPrinter || selectedPrinter === 'Browser Print') {
         return { success: false, fallback_to_browser: true, message: 'Chế độ In Qua Trình Duyệt được chọn' };
+    }
+    const printerEntry = entryClientPrintersRegistry.find(p => p.name.toLowerCase() === String(selectedPrinter || '').toLowerCase());
+
+    const isHttps = (window.location.protocol === 'https:');
+    const port = isHttps ? '9101' : '9100';
+    const proto = isHttps ? 'https:' : 'http:';
+    const writeUrl = `${proto}//127.0.0.1:${port}/write`;
+
+    const normalizedSize = normalizeEntrySize(labelSize);
+    const dpi = getPrinterDpi(selectedPrinter);
+    const zplData = buildZplForEntryZebra(labels, normalizedSize, selectedPrinter);
+
+    const dev = (printerEntry && printerEntry.device) ? printerEntry.device : {
+        name: selectedPrinter,
+        uid: (printerEntry && printerEntry.uid) ? printerEntry.uid : selectedPrinter,
+        connection: 'driver',
+        deviceType: 'printer',
+        version: 4
+    };
+
+    const is300 = (dpi === 300);
+    const zplDims = (normalizedSize === '80x110')
+        ? (is300 ? '945 × 1300 dots (80 × 110 mm Dọc)' : '640 × 880 dots (80 × 110 mm Dọc)')
+        : ((normalizedSize === '110x80')
+            ? (is300 ? '1300 × 945 dots (110 × 80 mm Ngang)' : '880 × 640 dots (110 × 80 mm Ngang)')
+            : (is300 ? '768 × 354 dots (65 × 30 mm Ngang)' : '520 × 240 dots (65 × 30 mm Ngang)'));
+
+    logEntryLabelDimensionAudit({
+        stage: 'BROWSER_PRINT_DISPATCH',
+        selectedSize: labelSize,
+        printerName: selectedPrinter,
+        dpi: dpi,
+        payloadSize: zplDims,
+        scale: '100% (Native ZPL dots, tỷ lệ thực tế 1:1, không scale)',
+        orientation: (normalizedSize === '80x110') ? 'portrait (Dọc)' : 'landscape (Ngang)'
+    });
+
+    const lotValues = labels.map(l => l.lot_no);
+    const boxValues = labels.map(l => l.box_no);
+
+    console.group('%c[ZEBRA_BROWSER_PRINT_AUDIT (ENTRY)] XUẤT LỆNH IN TRỰC TIẾP QUA ZEBRA BROWSER PRINT', 'color:#0284c7;font-weight:bold;');
+    console.log('1. Máy in được chọn:', selectedPrinter);
+    console.log('2. Loại tem được chọn (Khổ):', labelSize, `(${normalizedSize})`);
+    console.log('3. DPI nhận diện:', dpi + ' DPI (' + (dpi === 300 ? '12 dpmm' : '8 dpmm') + ')');
+    console.log('4. Giá trị Lot trước khi in:', lotValues);
+    console.log('5. Giá trị Box trước khi in:', boxValues);
+    console.log('6. Thiết bị Zebra Device:', dev);
+    console.log('7. URL gửi lệnh Browser Print:', writeUrl);
+    console.log('8. ZPL cuối cùng gửi tới máy in:\n' + zplData);
+    console.groupEnd();
+
+    let responseText = '';
+    let responseStatus = 0;
+    try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 6000);
+        const res = await fetch(writeUrl, {
+            method: 'POST',
+            mode: 'cors',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                device: dev,
+                data: zplData
+            }),
+            signal: ctrl.signal
+        });
+        clearTimeout(timer);
+        responseStatus = res.status;
+        responseText = await res.text().catch(() => '');
+
+        console.group('%c[ZEBRA_PRINT_RESPONSE (ENTRY)] Phản hồi từ Zebra Browser Print', 'color:#15803d;font-weight:bold;');
+        console.log('1. HTTP Status:', responseStatus, res.statusText);
+        console.log('2. Response Body:', responseText || '(empty/success)');
+        console.groupEnd();
+
+        if (res.ok) {
+            return {
+                success: true,
+                message: `Đã gửi trực tiếp ${labels.length} tem (${labelSize}) đến máy in "${selectedPrinter}" (${dpi} DPI).`,
+                raw_response: responseText
+            };
+        } else {
+            console.warn('[ZEBRA_PRINT_DEBUG (ENTRY)] ✗ Lỗi phản hồi HTTP từ Browser Print:', res.status, res.statusText, responseText);
+        }
+    } catch (e) {
+        console.error('[ZEBRA_PRINT_DEBUG (ENTRY)] ✗ Lỗi kết nối dịch vụ Zebra Browser Print:', e);
+        console.group('%c[ZEBRA_PRINT_RESPONSE (ENTRY)] Lỗi Ngoại Lệ Kết Nối', 'color:#dc2626;font-weight:bold;');
+        console.log('Exception details:', e);
+        console.groupEnd();
+    }
+
+    return {
+        success: false,
+        message: `Dịch vụ Zebra Browser Print không phản hồi hoặc không thể in ra "${selectedPrinter}".`
+    };
+}
     }
     const printerEntry = entryClientPrintersRegistry.find(p => p.name.toLowerCase() === String(selectedPrinter || '').toLowerCase());
 
@@ -1436,6 +1538,9 @@ function executeEntryPrintSubmission() {
                 labelCount: data.labels.length
             });
             openModal('modal_print_result');
+            return;
+        }
+
         const entryPrinterObj = entryClientPrintersRegistry.find(p => p.name.toLowerCase() === String(check.printer || '').toLowerCase());
         const isEntryZebraDirect = entryPrinterObj && entryPrinterObj.source === 'zebra_browser_print';
 
@@ -1667,6 +1772,19 @@ function renderPrintedLabels(labels) {
             else if (lotWithSupplier.length > 18) l4Class += ' label-font-sm';
         }
 
+        const boxStr = String(item.box_no || '');
+        let l5Class = 'label-line-5';
+        if (currentSize === '65x30') {
+            if (boxStr.length > 16) l5Class += ' label-font-xs';
+            else if (boxStr.length > 12) l5Class += ' label-font-sm';
+        } else if (currentSize === '110x80') {
+            if (boxStr.length > 16) l5Class += ' label-font-xs';
+            else if (boxStr.length > 12) l5Class += ' label-font-sm';
+        } else {
+            if (boxStr.length > 16) l5Class += ' label-font-xs';
+            else if (boxStr.length > 12) l5Class += ' label-font-sm';
+        }
+
         const labelHtml = `
             <div class="label-qr-col">
                 <img src="${item.qr_base64}" alt="QR" loading="eager">
@@ -1676,7 +1794,7 @@ function renderPrintedLabels(labels) {
                 <div class="label-line-2">${item.qty} pcs ${item.weight ? '| ' + item.weight + ' Kg' : ''}</div>
                 <div class="label-line-3">||</div>
                 <div class="${l4Class}">${escapeHtml(lot)}${supplier ? ' | ' + escapeHtml(supplier) : ''}</div>
-                <div class="label-line-5">${escapeHtml(item.box_no)}</div>
+                <div class="${l5Class}">${escapeHtml(item.box_no)}</div>
             </div>
         `;
         if (container) {
@@ -1767,6 +1885,68 @@ document.getElementById('btn_search').addEventListener('click', searchOrder);
 
 document.getElementById('input_print_qty').addEventListener('input', recalculate);
 document.getElementById('input_print_qty').addEventListener('change', recalculate);
+
+// BẤM NÚT XÁC NHẬN NHẬP & IN TEM THÙNG -> KIỂM TRA DỮ LIỆU & MỞ XÁC NHẬN / IN NGAY
+const btnSubmitStep = document.getElementById('btn_submit_step');
+if (btnSubmitStep) {
+    btnSubmitStep.addEventListener('click', function() {
+        const check = validateEntryPrePrint();
+        if (!check.valid) {
+            alert('VUI LÒNG KIỂM TRA DỮ LIỆU TRƯỚC KHI IN:\n- ' + check.errors.join('\n- '));
+            return;
+        }
+
+        const printQty = currentCalculation.printQty;
+        const remaining = parseInt(currentOrder.remaining_qty, 10);
+
+        // BẮT BUỘC KIỂM TRA THÙNG LẺ: Nếu có phần dư mà chưa tích chọn
+        if (currentCalculation.hasOdd && !document.getElementById('chk_is_odd_box').checked) {
+            alert('CẢNH BÁO THÙNG LẺ:\nSố lượng in (' + printQty + ' con) không chia hết cho quy cách (' + currentCalculation.packQty + ' con/thùng), dư ' + currentCalculation.remainder + ' con lẻ.\n\nBạn bắt buộc phải tích chọn ô "Cho phép in thùng lẻ" để tiếp tục!');
+            document.getElementById('chk_is_odd_box').focus();
+            return;
+        }
+
+        // BẮT BUỘC KIỂM TRA VƯỢT ĐỊNH MỨC:
+        if (printQty > remaining && (!verifiedAdminMsnv || !verifiedAdminPass || !verifiedOverrideReason)) {
+            document.getElementById('modal_req_qty').innerText = printQty.toLocaleString();
+            document.getElementById('modal_rem_qty').innerText = remaining.toLocaleString();
+            document.getElementById('modal_diff_qty').innerText = '+' + (printQty - remaining).toLocaleString() + ' con';
+            document.getElementById('input_admin_msnv').value = '';
+            document.getElementById('input_admin_pass').value = '';
+            document.getElementById('input_override_reason').value = '';
+            document.getElementById('admin_verify_feedback').innerText = '';
+            openModal('modal_admin_approval');
+            return;
+        }
+
+        // Điền dữ liệu vào Modal Xác Nhận trước khi gửi lệnh in
+        document.getElementById('cf_slip_code').innerText = currentOrder.slip_code;
+        document.getElementById('cf_order_code').innerText = currentOrder.order_code;
+        document.getElementById('cf_product_code').innerText = currentOrder.product_code;
+        document.getElementById('cf_print_qty').innerText = printQty.toLocaleString() + ' con';
+        document.getElementById('cf_pack_qty').innerText = currentCalculation.packQty + ' con/thùng';
+        document.getElementById('cf_box_count').innerText = currentCalculation.totalBoxes + ' TEM';
+        document.getElementById('cf_printer_name').innerText = check.printer;
+
+        const rowOdd = document.getElementById('cf_row_odd');
+        if (currentCalculation.hasOdd) {
+            rowOdd.style.display = 'table-row';
+            document.getElementById('cf_odd_desc').innerText = `Có 1 thùng lẻ (${currentCalculation.remainder} con)`;
+        } else {
+            rowOdd.style.display = 'none';
+        }
+
+        const rowOver = document.getElementById('cf_row_over');
+        if (printQty > remaining) {
+            rowOver.style.display = 'table-row';
+            document.getElementById('cf_over_desc').innerText = `Vượt +${(printQty - remaining).toLocaleString()} con (Duyệt bởi ${verifiedAdminMsnv})`;
+        } else {
+            rowOver.style.display = 'none';
+        }
+
+        openModal('modal_confirm');
+    });
+}
 
 // NẾU CÓ THAM SỐ URL THÌ TỰ TRA CỨU
 window.addEventListener('DOMContentLoaded', () => {

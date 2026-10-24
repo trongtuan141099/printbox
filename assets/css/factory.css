@@ -1117,7 +1117,16 @@ body.modal-open {
     color: #000000;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+}
+.label-line-5.label-font-sm {
+    font-size: 7.2pt;
+    letter-spacing: 0.2px;
+}
+.label-line-5.label-font-xs {
+    font-size: 6.2pt;
+    letter-spacing: 0;
 }
 
 
@@ -1138,7 +1147,7 @@ body.modal-open {
     justify-content: space-between;
     gap: 3mm;
     box-sizing: border-box;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .label-size-110x80 .label-qr-col,
@@ -1172,7 +1181,7 @@ body.modal-open {
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    overflow: hidden;
+    overflow: visible;
     line-height: 1.15;
     text-align: left;
 }
@@ -1239,7 +1248,7 @@ body.modal-open {
 
 .label-size-110x80 .label-line-5,
 .box-label-item.label-size-110x80 .label-line-5 {
-    font-size: 16.5pt;
+    font-size: 1pt;
     font-weight: 900;
     letter-spacing: 0.4px;
     text-align: left;
@@ -1248,8 +1257,27 @@ body.modal-open {
     margin-top: 0;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    word-break: break-all;
+    overflow-wrap: anywhere;
     color: #000000;
+        /* font-size: 16.5pt;
+    font-weight: 900;
+    text-align: left;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    line-height: 1.1;
+    color: #000000; */
+}
+.label-size-110x80 .label-line-5.label-font-sm,
+.box-label-item.label-size-110x80 .label-line-5.label-font-sm {
+    font-size: 1pt;
+    letter-spacing: 0.2px;
+}
+.label-size-110x80 .label-line-5.label-font-xs,
+.box-label-item.label-size-110x80 .label-line-5.label-font-xs {
+    font-size: 1pt;
+    letter-spacing: 0;
 }
 
 /* =======================================================
@@ -1369,6 +1397,27 @@ body.modal-open {
     border-top: 2px solid #000000;
     padding-top: 1.5mm;
     color: #000000;
+    white-space: nowrap;
+    overflow: hidden;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+        /* font-size: 13pt;
+    font-weight: 900;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    line-height: 1.1;
+    color: #000000; */
+}
+.label-size-80x110 .label-line-5.label-font-sm,
+.box-label-item.label-size-80x110 .label-line-5.label-font-sm {
+    font-size: 11pt;
+    letter-spacing: 0.2px;
+}
+.label-size-80x110 .label-line-5.label-font-xs,
+.box-label-item.label-size-80x110 .label-line-5.label-font-xs {
+    font-size: 9.5pt;
+    letter-spacing: 0;
 }
 
 /* Render off-screen on normal display so browser eagerly decodes QR images before window.print() */
@@ -1562,8 +1611,17 @@ body.modal-open {
         line-height: 1.08 !important;
         color: #000000 !important;
         white-space: nowrap !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
+        overflow: visible !important;
+        word-break: break-all !important;
+        overflow-wrap: anywhere !important;
+    }
+    #print_standalone_zone .label-line-5.label-font-sm {
+        font-size: 7.2pt !important;
+        letter-spacing: 0.2px !important;
+    }
+    #print_standalone_zone .label-line-5.label-font-xs {
+        font-size: 6.2pt !important;
+        letter-spacing: 0 !important;
     }
 
     /* =========================================================
@@ -1689,7 +1747,7 @@ body.modal-open {
     }
 
     #print_standalone_zone.label-size-110x80 .label-line-5 {
-        font-size: 16.5pt !important;
+        font-size: 12.5pt !important;
         font-weight: 900 !important;
         letter-spacing: 0.4px !important;
         text-align: left !important;
@@ -1697,9 +1755,19 @@ body.modal-open {
         padding-top: 1.8mm !important;
         margin-top: 0 !important;
         white-space: nowrap !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
+        /* overflow: hidden !important; */
+        overflow: visible !important;
+        word-break: break-all !important;
+        overflow-wrap: anywhere !important;
         color: #000000 !important;
+    }
+    #print_standalone_zone.label-size-110x80 .label-line-5.label-font-sm {
+        font-size: 12.5pt !important;
+        letter-spacing: 0.2px !important;
+    }
+    #print_standalone_zone.label-size-110x80 .label-line-5.label-font-xs {
+        font-size: 10.5pt !important;
+        letter-spacing: 0 !important;
     }
 
     /* =========================================================
@@ -1821,6 +1889,18 @@ body.modal-open {
         border-top: 2px solid #000000 !important;
         padding-top: 1.5mm !important;
         color: #000000 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        word-break: break-all !important;
+        overflow-wrap: anywhere !important;
+    }
+    #print_standalone_zone.label-size-80x110 .label-line-5.label-font-sm {
+        font-size: 11pt !important;
+        letter-spacing: 0.2px !important;
+    }
+    #print_standalone_zone.label-size-80x110 .label-line-5.label-font-xs {
+        font-size: 9.5pt !important;
+        letter-spacing: 0 !important;
     }
 
     .navbar, .app-header-bar, .no-print {
