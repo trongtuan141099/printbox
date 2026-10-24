@@ -1662,8 +1662,8 @@ body.modal-open {
     }
 
     #print_standalone_zone.label-size-110x80 .label-qr-col {
-        width: 58mm !important;
-        height: 58mm !important;
+        width: 48mm !important;
+        height: 48mm !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
@@ -1673,8 +1673,8 @@ body.modal-open {
 
     #print_standalone_zone.label-size-110x80 .label-qr-col img,
     #print_standalone_zone.label-size-110x80 .label-qr-col svg {
-        width: 58mm !important;
-        height: 58mm !important;
+        width: 48mm !important;
+        height: 48mm !important;
         display: block !important;
         image-rendering: pixelated !important;
         image-rendering: crisp-edges !important;
@@ -1695,7 +1695,7 @@ body.modal-open {
     }
 
     #print_standalone_zone.label-size-110x80 .label-line-1 {
-        font-size: 16.5pt !important;
+        font-size: 14.5pt !important;
         font-weight: 900 !important;
         text-align: left !important;
         word-break: break-all !important;

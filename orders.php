@@ -1185,9 +1185,9 @@ $exportParams = http_build_query([
             </div>
 
             <div class="mb-3">
-                <label class="form-label fw-bold required">Số Lượng Tem Sản Phẩm Đã In Lượt Này (con / pcs)</label>
+                <label class="form-label fw-bold required">Số Lượng Tem SATO đã in:</label>
                 <input type="number" id="offcanvas_print_qty" class="form-control form-control-lg fw-bold" 
-                       placeholder="Nhập số lượng tem (vd: 20, 50, 100)..." min="1" step="1">
+                       min="1">
                 <small class="text-muted">Hệ thống sẽ tự động tính số tem thùng = Số lượng in &divide; Quy cách đóng gói.</small>
             </div>
 
@@ -1245,7 +1245,7 @@ $exportParams = http_build_query([
                 </div>
             </div>
 
-            <div class="mb-3">
+            <!-- <div class="mb-3">
                 <div class="d-flex justify-content-between align-items-center mb-1">
                     <label class="form-label fw-bold mb-0">🖨️ Máy In Tem Sử Dụng (Mặc định)</label>
                     <div class="d-flex flex-wrap gap-1 align-items-center">
@@ -1271,7 +1271,6 @@ $exportParams = http_build_query([
                 </select>
                 <div id="offcanvas_printer_status_msg" class="mt-1 small fw-bold" style="display:none;"></div>
 
-                <!-- THÔNG BÁO THÂN THIỆN & FALLBACK KHI KHÔNG TÌM THẤY DỊCH VỤ IN CỤC BỘ -->
                 <div id="offcanvas_no_service_panel" class="alert alert-warning border-warning p-2 mt-2 mb-0" style="display:none; background:#fffbeb; border-radius:8px;">
                     <div class="fw-bold text-warning-emphasis mb-1" style="font-size:0.9rem;">
                         ⚠️ Không phát hiện dịch vụ máy in cục bộ trên máy tính này
@@ -1292,22 +1291,22 @@ $exportParams = http_build_query([
                 </div>
 
 
-            </div>
+            </div> -->
 
             <!-- CHỌN KHỔ TEM IN -->
             <div class="mb-3">
                 <label class="form-label fw-bold mb-1">📐 Kích Thước Tem In:</label>
                 <select id="offcanvas_label_size_select" class="form-select border-primary fw-bold" onchange="onLabelSizeChange(this.value)">
-                    <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang)</option>
                     <option value="110x80" <?= ($defaultLabelSize === '110x80') ? 'selected' : '' ?>>Tem lớn (110 × 80 mm - Ngang)</option>
                     <option value="80x110" <?= ($defaultLabelSize === '80x110') ? 'selected' : '' ?>>Tem đứng (80 × 110 mm - Dọc)</option>
+                    <option value="65x30" <?= ($defaultLabelSize === '65x30') ? 'selected' : '' ?>>Tem nhỏ (65 × 30 mm - Ngang)</option>
                 </select>
 
             </div>
 
             <!-- TÙY CHỌN CHẾ ĐỘ IN: IN TRỰC TIẾP HOẶC XEM TRƯỚC -->
             <div class="mb-3 p-2 bg-light border rounded">
-                <div class="d-flex justify-content-between align-items-center mb-1">
+                <!-- <div class="d-flex justify-content-between align-items-center mb-1">
                     <label class="form-label fw-bold mb-0 small text-dark">⚡ Chế Độ Xuất Lệnh In:</label>
                     <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2" style="font-size: 0.78rem;" onclick="previewDraftLayoutOffcanvas()">
                         🔍 Xem mẫu bố cục
@@ -1327,7 +1326,7 @@ $exportParams = http_build_query([
                         </label>
                     </div>
                 </div>
-            </div>
+            </div> -->
 
             <div class="mb-3">
                 <label class="form-label">Ghi Chú Đợt In (Tùy chọn)</label>
@@ -1430,14 +1429,14 @@ $exportParams = http_build_query([
                     Chênh lệch vượt mức: <strong id="modal_diff_qty" class="text-danger">+0 con</strong>.
                 </div>
 
-                <p class="fw-bold text-dark mb-2">
+                <!-- <p class="fw-bold text-dark mb-2">
                     Bắt buộc Quản lý / Admin / Editor nhập Mã số nhân viên (MSNV), Mật khẩu và Lý do in vượt để xác nhận ủy quyền:
-                </p>
+                </p> -->
 
                 <div class="mb-3">
                     <label for="input_admin_msnv" class="form-label required fw-bold">Mã số nhân viên người duyệt (MSNV)</label>
                     <input type="text" id="input_admin_msnv" name="msnv" class="form-control form-control-lg" 
-                           placeholder="Nhập MSNV Admin/Editor (vd: ADM-001, NV-001)..." 
+                           placeholder="" 
                            tabindex="1" autocomplete="off" required>
                     <small class="text-muted">Nhập mã MSNV của tài khoản có vai trò Admin hoặc Editor.</small>
                 </div>
@@ -1446,7 +1445,7 @@ $exportParams = http_build_query([
                     <label for="input_admin_pass" class="form-label required fw-bold">Mật khẩu xác thực (Password / PIN)</label>
                     <div class="input-group">
                         <input type="password" id="input_admin_pass" name="password" class="form-control form-control-lg" 
-                               placeholder="Nhập mật khẩu tài khoản người duyệt..." 
+                               placeholder="" 
                                tabindex="2" autocomplete="current-password" required>
                         <button class="btn btn-outline-secondary" type="button" id="btn_toggle_approval_pass" tabindex="-1" title="Ẩn/Hiện mật khẩu">
                             👁️
@@ -1457,7 +1456,7 @@ $exportParams = http_build_query([
                 <div class="mb-3">
                     <label for="input_override_reason" class="form-label required fw-bold">Lý do in vượt định mức</label>
                     <textarea id="input_override_reason" name="override_reason" class="form-control" rows="2"
-                              placeholder="Nhập rõ lý do in vượt định mức (bắt buộc, vd: In bù hàng NG, thay thế tem hỏng, bổ sung theo yêu cầu)..."
+                              placeholder=""
                               tabindex="3" required></textarea>
                     <small class="text-muted">Thông tin MSNV, thời gian, nội dung và lý do vượt định mức sẽ được lưu vào Lịch sử in.</small>
                     <div id="admin_verify_feedback" class="mt-2 small fw-bold"></div>
